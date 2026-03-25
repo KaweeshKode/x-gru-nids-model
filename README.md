@@ -1,91 +1,89 @@
 # CNN-GRU + XAI Intrusion Detection Pipeline
 
-This project is the cleaned implementation of your FYP pipeline for network intrusion detection and forensic analysis.
+This repository contains the cleaned FYP implementation for intrusion detection and forensic analysis using a CNN-GRU model with XAI outputs.
 
-## Main flow
+## Pipeline Steps
 
-The active pipeline in this folder is:
+Current active scripts in order:
 
-1. `01_prepare_unsw_dataset.py`
-2. `04_generate_calibrated_pseudo_labels.py`
-3. `05_build_sequence_datasets.py`
-4. `06_train_cnn_gru_model.py`
-5. `07_evaluate_cnn_gru_model.py`
-6. `08_tune_final_decision_rule.py`
-7. `09_generate_shap_explanations.py`
-8. `10_generate_lime_explanations.py`
-9. `11_generate_forensic_reports.py`
+1. `01_data_preprocessing.py`
+2. `02_pseudo_label_generation.py`
+3. `03_sequence_dataset_builder.py`
+4. `04_model_training.py`
+5. `05_model_evaluation_and_xai.py`
+6. `06_forensic_reporting.py`
 
-The older experimental steps `02` and `03` were intentionally left out of this clean implementation folder.
-
-## Folder layout
+## Folder Structure
 
 ```text
 Implementation/
-│   README.md
-│   run_pipeline.bat
 │
 ├── data/
 │   ├── raw/
-│   ├── interim/
-│   └── final/
+│   ├── processed/
+│   ├── pseudo_labels/
+│   └── sequences/
 │
-├── logs/
 ├── models/
+│   ├── preprocessing/
+│   ├── pseudo_labels/
+│   ├── trained_models/
+│   └── training_history/
+│
 ├── outputs/
-└── scripts/
+│   ├── evaluation/
+│   ├── pseudo_labels/
+│   ├── xai/
+│   │   ├── shap/
+│   │   ├── lime/
+│   │   └── comparison/
+│   ├── forensic_reports/
+│   │   └── cases/
+│   ├── forensic_audit/
+│   └── plots/
+│       ├── preprocessing/
+│       ├── pseudo_labels/
+│       ├── sequences/
+│       ├── training/
+│       ├── evaluation/
+│       ├── xai/
+│       └── forensic/
+│
+├── scripts/
+├── archive/
+├── run_pipeline.bat
+└── README.md
 ```
 
-## Data locations
+## Required Input Data
 
-Place the source files here:
+Place UNSW-NB15 source files in `data/raw/`:
 
-- `data/raw/UNSW-NB15_1.csv`
-- `data/raw/UNSW-NB15_2.csv`
-- `data/raw/UNSW-NB15_3.csv`
-- `data/raw/UNSW-NB15_4.csv`
-- `data/raw/Training and Testing Sets/UNSW_NB15_training-set.csv`
-- `data/raw/Training and Testing Sets/UNSW_NB15_testing-set.csv`
+- `UNSW-NB15_1.csv`
+- `UNSW-NB15_2.csv`
+- `UNSW-NB15_3.csv`
+- `UNSW-NB15_4.csv`
+- `NUSW-NB15_features.csv`
 
-Supporting CSV files such as feature descriptions can stay in `data/raw/`.
+Additional support files can remain in `data/raw/`.
 
-## Script outputs
+## How To Run
 
-### Intermediate data
-- `data/interim/prepared/`
-- `data/interim/calibrated_labels/`
-- `data/interim/sequences/`
-
-### Models
-- `models/cnn_gru/`
-
-### Reports and analysis
-- `outputs/evaluation/`
-- `outputs/plots/`
-- `outputs/xai/shap/`
-- `outputs/xai/lime/`
-- `outputs/forensic_reports/`
-
-## How to run
-
-Open a terminal in the project root:
+From project root:
 
 ```bat
 cd D:\Studies\IIT\FYP\Implementation
 ```
 
-Run step by step:
+Run step-by-step:
 
 ```bat
-python scripts\01_prepare_unsw_dataset.py
-python scripts\04_generate_calibrated_pseudo_labels.py
-python scripts\05_build_sequence_datasets.py
-python scripts\06_train_cnn_gru_model.py
-python scripts\07_evaluate_cnn_gru_model.py
-python scripts\08_tune_final_decision_rule.py
-python scripts\09_generate_shap_explanations.py
-python scripts\10_generate_lime_explanations.py
-python scripts\11_generate_forensic_reports.py
+python scripts\01_data_preprocessing.py
+python scripts\02_pseudo_label_generation.py
+python scripts\03_sequence_dataset_builder.py
+python scripts\04_model_training.py
+python scripts\05_model_evaluation_and_xai.py
+python scripts\06_forensic_reporting.py
 ```
 
 Or run the full pipeline:
@@ -94,12 +92,8 @@ Or run the full pipeline:
 run_pipeline.bat
 ```
 
-## Shared path helper
-
-The file `project_paths.py` contains the common directory structure used by all scripts. Keep it inside the `scripts/` folder with the pipeline files.
-
 ## Notes
 
-- This cleaned version focuses on the final FYP flow: dataset preparation, pseudo-labeling, CNN-GRU training, evaluation, XAI, and forensic reporting.
-- Keep old experimental scripts in your archive or in `new-pipeline-test` so the main implementation folder stays clean.
-- If you rename folders again later, update `project_paths.py` first instead of changing paths inside every script.
+- `archive/` is intentionally kept for historical versions.
+- Generated data, model artifacts, and outputs are excluded from GitHub using `.gitignore`.
+- If paths change later, update path handling in `scripts/project_paths.py`.
