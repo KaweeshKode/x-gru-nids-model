@@ -1,0 +1,26 @@
+# Python cache
+__pycache__/
+*.pyc
+
+# VS Code local settings
+.vscode/
+
+# Data folders (raw + generated)
+data/raw/
+data/processed/
+data/pseudo_labels/
+data/sequences/
+
+# Model artifacts
+models/preprocessing/
+models/pseudo_labels/
+models/trained_models/
+models/training_history/
+
+# Generated outputs and logs
+outputs/
+logs/
+
+# Archives and legacy snapshots
+archive/*.rar
+archive/Implementation_v1/

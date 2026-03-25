@@ -1,0 +1,214 @@
+import json
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import tensorflow as tf
+from sklearn.metrics import classification_report
+from sklearn.utils.class_weight import compute_class_weight
+from tensorflow.keras.callbacks import CSVLogger, EarlyStopping, ModelCheckpoint
+from tensorflow.keras.layers import Conv1D, Dense, Dropout, GRU, MaxPooling1D
+from tensorflow.keras.models import Sequential
+
+
+BASE_DIR = Path(__file__).resolve().parents[1]
+
+SEQUENCE_DATA_DIR = BASE_DIR / "data" / "sequences"
+
+TRAINED_MODEL_DIR = BASE_DIR / "models" / "trained_models"
+TRAINING_HISTORY_DIR = BASE_DIR / "models" / "training_history"
+
+TRAINING_PLOT_DIR = BASE_DIR / "outputs" / "plots" / "training"
+
+RANDOM_STATE = 42
+EPOCHS = 20
+BATCH_SIZE = 256
+LEARNING_RATE = 1e-3
+
+CLASS_NAMES = ["normal", "suspicious", "attack"]
+
+
+def print_step(title: str) -> None:
+    print("\n" + "=" * 60)
+    print(title)
+    print("=" * 60)
+
+
+def create_folders() -> None:
+    for folder in [TRAINED_MODEL_DIR, TRAINING_HISTORY_DIR, TRAINING_PLOT_DIR]:
+        folder.mkdir(parents=True, exist_ok=True)
+
+
+def save_json(payload: dict, path: Path) -> None:
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2)
+
+
+def load_sequence_datasets():
+    X_train = np.load(SEQUENCE_DATA_DIR / "X_train_sequences.npy")
+    y_train = np.load(SEQUENCE_DATA_DIR / "y_train_labels.npy")
+
+    X_validation = np.load(SEQUENCE_DATA_DIR / "X_validation_sequences.npy")
+    y_validation = np.load(SEQUENCE_DATA_DIR / "y_validation_labels.npy")
+
+    return X_train, y_train, X_validation, y_validation
+
+
+def print_class_distribution(name: str, labels: np.ndarray) -> None:
+    label_counts = pd.Series(labels).value_counts().sort_index().to_dict()
+    readable_counts = {CLASS_NAMES[int(key)]: int(value) for key, value in label_counts.items()}
+    print(f"[INFO] {name} label counts: {readable_counts}")
+
+
+def calculate_class_weights(y_train: np.ndarray) -> dict[int, float]:
+    unique_classes = np.unique(y_train)
+    class_weights = compute_class_weight(
+        class_weight="balanced",
+        classes=unique_classes,
+        y=y_train,
+    )
+    return {int(class_id): float(weight) for class_id, weight in zip(unique_classes, class_weights)}
+
+
+def build_cnn_gru_model(input_shape: tuple[int, int], num_classes: int = 3) -> Sequential:
+    model = Sequential(
+        [
+            Conv1D(64, kernel_size=3, activation="relu", input_shape=input_shape),
+            MaxPooling1D(pool_size=2),
+            GRU(64),
+            Dropout(0.30),
+            Dense(32, activation="relu"),
+            Dense(num_classes, activation="softmax"),
+        ]
+    )
+
+    optimizer = tf.keras.optimizers.Adam(learning_rate=LEARNING_RATE)
+    model.compile(
+        optimizer=optimizer,
+        loss="sparse_categorical_crossentropy",
+        metrics=["accuracy"],
+    )
+    return model
+
+
+def create_training_callbacks(model_path: Path, history_csv_path: Path):
+    return [
+        EarlyStopping(
+            monitor="val_loss",
+            patience=4,
+            restore_best_weights=True,
+            verbose=1,
+        ),
+        ModelCheckpoint(
+            filepath=str(model_path),
+            monitor="val_loss",
+            save_best_only=True,
+            verbose=1,
+        ),
+        CSVLogger(str(history_csv_path)),
+    ]
+
+
+def create_training_plots(history) -> None:
+    history_table = history.history
+
+    plt.figure(figsize=(8, 5))
+    plt.plot(history_table["loss"], label="train_loss")
+    plt.plot(history_table["val_loss"], label="validation_loss")
+    plt.legend()
+    plt.title("Training vs validation loss")
+    plt.tight_layout()
+    plt.savefig(TRAINING_PLOT_DIR / "loss_curve.png", dpi=150)
+    plt.close()
+
+    plt.figure(figsize=(8, 5))
+    plt.plot(history_table["accuracy"], label="train_accuracy")
+    plt.plot(history_table["val_accuracy"], label="validation_accuracy")
+    plt.legend()
+    plt.title("Training vs validation accuracy")
+    plt.tight_layout()
+    plt.savefig(TRAINING_PLOT_DIR / "accuracy_curve.png", dpi=150)
+    plt.close()
+
+
+def evaluate_validation_predictions(model: Sequential, X_validation: np.ndarray, y_validation: np.ndarray) -> None:
+    predicted_probabilities = model.predict(X_validation, batch_size=BATCH_SIZE, verbose=0)
+    predicted_labels = np.argmax(predicted_probabilities, axis=1)
+
+    report = classification_report(
+        y_validation,
+        predicted_labels,
+        labels=[0, 1, 2],
+        target_names=CLASS_NAMES,
+        digits=4,
+        zero_division=0,
+    )
+
+    with open(TRAINING_HISTORY_DIR / "validation_classification_report.txt", "w", encoding="utf-8") as handle:
+        handle.write(report)
+
+
+def main() -> None:
+    np.random.seed(RANDOM_STATE)
+    tf.random.set_seed(RANDOM_STATE)
+
+    create_folders()
+
+    model_path = TRAINED_MODEL_DIR / "cnn_gru_intrusion_model.keras"
+    history_csv_path = TRAINING_HISTORY_DIR / "training_history.csv"
+
+    print_step("[STEP 1] Load sequence datasets")
+    X_train, y_train, X_validation, y_validation = load_sequence_datasets()
+
+    print_class_distribution("Train", y_train)
+    print_class_distribution("Validation", y_validation)
+
+    print_step("[STEP 2] Calculate class weights")
+    class_weights = calculate_class_weights(y_train)
+
+    print_step("[STEP 3] Build CNN-GRU model")
+    input_shape = (X_train.shape[1], X_train.shape[2])
+    model = build_cnn_gru_model(input_shape=input_shape, num_classes=3)
+
+    print_step("[STEP 4] Train model")
+    history = model.fit(
+        X_train,
+        y_train,
+        validation_data=(X_validation, y_validation),
+        epochs=EPOCHS,
+        batch_size=BATCH_SIZE,
+        class_weight=class_weights,
+        callbacks=create_training_callbacks(model_path, history_csv_path),
+        verbose=1,
+    )
+
+    print_step("[STEP 5] Save model, history, and plots")
+    model.save(model_path)
+
+    save_json(
+        {key: [float(value) for value in values] for key, values in history.history.items()},
+        TRAINING_HISTORY_DIR / "training_history.json",
+    )
+
+    save_json(
+        {
+            "epochs": EPOCHS,
+            "batch_size": BATCH_SIZE,
+            "learning_rate": LEARNING_RATE,
+            "input_shape": list(input_shape),
+            "class_names": CLASS_NAMES,
+            "class_weights": class_weights,
+        },
+        TRAINING_HISTORY_DIR / "training_config.json",
+    )
+
+    create_training_plots(history)
+    evaluate_validation_predictions(model, X_validation, y_validation)
+
+    print_step("[DONE]")
+    print("[INFO] Model training completed successfully.")
+
+
+if __name__ == "__main__":
+    main()
