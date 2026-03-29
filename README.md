@@ -96,4 +96,4 @@ run_pipeline.bat
 
 - `archive/` is intentionally kept for historical versions.
 - Generated data, model artifacts, and outputs are excluded from GitHub using `.gitignore`.
-- If paths change later, update path handling in `scripts/project_paths.py`.
+- If paths change later, update the path constants directly inside the active pipeline scripts.
