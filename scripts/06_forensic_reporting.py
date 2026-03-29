@@ -5,6 +5,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from pandas.errors import EmptyDataError
 
 
 BASE_DIR = Path(__file__).resolve().parents[1]
@@ -16,6 +17,8 @@ TRAINING_HISTORY_DIR = BASE_DIR / "models" / "training_history"
 EVALUATION_OUTPUT_DIR = BASE_DIR / "outputs" / "evaluation"
 SHAP_OUTPUT_DIR = BASE_DIR / "outputs" / "xai" / "shap"
 LIME_OUTPUT_DIR = BASE_DIR / "outputs" / "xai" / "lime"
+XAI_COMPARISON_OUTPUT_DIR = BASE_DIR / "outputs" / "xai" / "comparison"
+XAI_METRICS_DIR = BASE_DIR / "outputs" / "xai" / "metrics"
 
 FORENSIC_REPORT_DIR = BASE_DIR / "outputs" / "forensic_reports"
 FORENSIC_CASE_DIR = FORENSIC_REPORT_DIR / "cases"
@@ -60,15 +63,86 @@ def file_sha256(path: Path) -> str | None:
     return hasher.hexdigest()
 
 
+def safe_read_csv(path: Path, fallback_columns: list[str] | None = None) -> pd.DataFrame:
+    if not path.exists():
+        return pd.DataFrame(columns=fallback_columns or [])
+    try:
+        return pd.read_csv(path)
+    except EmptyDataError:
+        return pd.DataFrame(columns=fallback_columns or [])
+
+
+def load_optional_json(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    with open(path, "r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
 def load_reporting_inputs():
     prediction_table = pd.read_csv(EVALUATION_OUTPUT_DIR / "test_predictions.csv")
     sequence_metadata_table = pd.read_csv(SEQUENCE_DATA_DIR / "test_sequence_metadata.csv")
 
-    shap_global_table = pd.read_csv(SHAP_OUTPUT_DIR / "shap_global_feature_importance.csv")
-    shap_local_summary_table = pd.read_csv(SHAP_OUTPUT_DIR / "shap_local_summary.csv")
+    shap_global_table = safe_read_csv(
+        SHAP_OUTPUT_DIR / "shap_global_feature_importance.csv",
+        ["flat_feature", "mean_absolute_shap_value"],
+    )
+    shap_local_summary_table = safe_read_csv(
+        SHAP_OUTPUT_DIR / "shap_local_summary.csv",
+        [
+            "sample_row_index",
+            "predicted_label_id",
+            "predicted_label_name",
+            "rank",
+            "flat_feature",
+            "shap_value",
+            "absolute_shap_value",
+        ],
+    )
 
-    lime_summary_path = LIME_OUTPUT_DIR / "lime_explanation_summary.csv"
-    lime_summary_table = pd.read_csv(lime_summary_path) if lime_summary_path.exists() else pd.DataFrame()
+    lime_summary_table = safe_read_csv(
+        LIME_OUTPUT_DIR / "lime_explanation_summary.csv",
+        [
+            "sample_row_index",
+            "predicted_label_id",
+            "predicted_label_name",
+            "rank",
+            "condition_or_feature",
+            "lime_weight",
+            "absolute_lime_weight",
+        ],
+    )
+
+    xai_case_comparison_table = safe_read_csv(
+        XAI_COMPARISON_OUTPUT_DIR / "xai_case_level_comparison.csv",
+        [
+            "sample_row_index",
+            "predicted_label_name",
+            "shap_feature_count",
+            "lime_feature_count",
+            "shared_feature_count",
+            "jaccard_similarity",
+            "shared_features",
+        ],
+    )
+
+    shap_fidelity_table = safe_read_csv(
+        XAI_METRICS_DIR / "shap_fidelity_scores.csv",
+        ["sample_row_index", "predicted_label_name", "predicted_class_probability", "masked_probability", "fidelity_score"],
+    )
+    lime_fidelity_table = safe_read_csv(
+        XAI_METRICS_DIR / "lime_fidelity_scores.csv",
+        ["sample_row_index", "predicted_label_name", "predicted_class_probability", "masked_probability", "fidelity_score"],
+    )
+    shap_stability_table = safe_read_csv(
+        XAI_METRICS_DIR / "shap_stability_scores.csv",
+        ["sample_row_index", "predicted_label_name", "stability_score"],
+    )
+    lime_stability_table = safe_read_csv(
+        XAI_METRICS_DIR / "lime_stability_scores.csv",
+        ["sample_row_index", "predicted_label_name", "stability_score"],
+    )
+    xai_metrics_summary = load_optional_json(XAI_METRICS_DIR / "xai_metrics_summary.json")
 
     return (
         prediction_table,
@@ -76,6 +150,12 @@ def load_reporting_inputs():
         shap_global_table,
         shap_local_summary_table,
         lime_summary_table,
+        xai_case_comparison_table,
+        shap_fidelity_table,
+        lime_fidelity_table,
+        shap_stability_table,
+        lime_stability_table,
+        xai_metrics_summary,
     )
 
 
@@ -115,11 +195,65 @@ def write_analyst_recommendation(predicted_label_name: str) -> str:
     return "Mark for analyst triage and verify whether the behaviour matches known suspicious activity."
 
 
+def lookup_metric(table: pd.DataFrame, sample_row_index: int, value_column: str) -> float | None:
+    if table.empty or "sample_row_index" not in table.columns or value_column not in table.columns:
+        return None
+    matched = table[table["sample_row_index"] == sample_row_index]
+    if matched.empty:
+        return None
+    try:
+        return float(matched.iloc[0][value_column])
+    except Exception:
+        return None
+
+
+def build_explanation_quality_summary(
+    jaccard_similarity: float | None,
+    shap_fidelity: float | None,
+    lime_fidelity: float | None,
+    shap_stability: float | None,
+    lime_stability: float | None,
+) -> str:
+    parts = []
+
+    if jaccard_similarity is not None:
+        parts.append(f"SHAP-LIME overlap={jaccard_similarity:.3f}")
+    else:
+        parts.append("SHAP-LIME overlap unavailable")
+
+    if shap_fidelity is not None:
+        parts.append(f"SHAP fidelity={shap_fidelity:.3f}")
+    else:
+        parts.append("SHAP fidelity unavailable")
+
+    if lime_fidelity is not None:
+        parts.append(f"LIME fidelity={lime_fidelity:.3f}")
+    else:
+        parts.append("LIME fidelity unavailable")
+
+    if shap_stability is not None:
+        parts.append(f"SHAP stability={shap_stability:.3f}")
+    else:
+        parts.append("SHAP stability unavailable")
+
+    if lime_stability is not None:
+        parts.append(f"LIME stability={lime_stability:.3f}")
+    else:
+        parts.append("LIME stability unavailable")
+
+    return "; ".join(parts)
+
+
 def build_forensic_case_record(
     case_number: int,
     case_row: pd.Series,
     shap_local_summary_table: pd.DataFrame,
     lime_summary_table: pd.DataFrame,
+    xai_case_comparison_table: pd.DataFrame,
+    shap_fidelity_table: pd.DataFrame,
+    lime_fidelity_table: pd.DataFrame,
+    shap_stability_table: pd.DataFrame,
+    lime_stability_table: pd.DataFrame,
 ):
     sample_row_index = int(case_row.name)
 
@@ -132,14 +266,20 @@ def build_forensic_case_record(
     ].copy()
 
     shap_top_features = shap_case["flat_feature"].head(10).astype(str).tolist() if not shap_case.empty else []
-    lime_case["normalized_feature"] = (
-        lime_case["condition_or_feature"].apply(_normalize_lime_feature_name)
-        if not lime_case.empty
-        else []
-    )
-    lime_top_features = lime_case["normalized_feature"].head(10).astype(str).tolist() if not lime_case.empty else []
+
+    if not lime_case.empty:
+        lime_case["normalized_feature"] = lime_case["condition_or_feature"].apply(_normalize_lime_feature_name)
+        lime_top_features = lime_case["normalized_feature"].head(10).astype(str).tolist()
+    else:
+        lime_top_features = []
 
     shared_features = sorted(set(shap_top_features).intersection(set(lime_top_features)))
+
+    jaccard_similarity = lookup_metric(xai_case_comparison_table, sample_row_index, "jaccard_similarity")
+    shap_fidelity = lookup_metric(shap_fidelity_table, sample_row_index, "fidelity_score")
+    lime_fidelity = lookup_metric(lime_fidelity_table, sample_row_index, "fidelity_score")
+    shap_stability = lookup_metric(shap_stability_table, sample_row_index, "stability_score")
+    lime_stability = lookup_metric(lime_stability_table, sample_row_index, "stability_score")
 
     forensic_record = {
         "case_id": f"case_{case_number:06d}",
@@ -155,6 +295,18 @@ def build_forensic_case_record(
         "shap_top_features": shap_top_features,
         "lime_top_features": lime_top_features,
         "shared_features": shared_features,
+        "jaccard_similarity": jaccard_similarity,
+        "shap_fidelity": shap_fidelity,
+        "lime_fidelity": lime_fidelity,
+        "shap_stability": shap_stability,
+        "lime_stability": lime_stability,
+        "explanation_quality_summary": build_explanation_quality_summary(
+            jaccard_similarity,
+            shap_fidelity,
+            lime_fidelity,
+            shap_stability,
+            lime_stability,
+        ),
         "plain_language_explanation": write_plain_language_explanation(
             str(case_row["predicted_label_name"]),
             shap_top_features,
@@ -169,6 +321,11 @@ def generate_forensic_case_reports(
     forensic_cases_table: pd.DataFrame,
     shap_local_summary_table: pd.DataFrame,
     lime_summary_table: pd.DataFrame,
+    xai_case_comparison_table: pd.DataFrame,
+    shap_fidelity_table: pd.DataFrame,
+    lime_fidelity_table: pd.DataFrame,
+    shap_stability_table: pd.DataFrame,
+    lime_stability_table: pd.DataFrame,
 ):
     forensic_records = []
 
@@ -178,9 +335,13 @@ def generate_forensic_case_reports(
             case_row,
             shap_local_summary_table,
             lime_summary_table,
+            xai_case_comparison_table,
+            shap_fidelity_table,
+            lime_fidelity_table,
+            shap_stability_table,
+            lime_stability_table,
         )
         forensic_records.append(record)
-
         save_json(record, FORENSIC_CASE_DIR / f"{record['case_id']}.json")
 
     return forensic_records
@@ -215,9 +376,10 @@ def create_forensic_plots(summary_table: pd.DataFrame) -> None:
     plt.close()
 
     all_shared_features = []
-    for shared_feature_list in summary_table["shared_features"]:
-        if isinstance(shared_feature_list, list):
-            all_shared_features.extend(shared_feature_list)
+    if "shared_features" in summary_table.columns:
+        for shared_feature_list in summary_table["shared_features"]:
+            if isinstance(shared_feature_list, list):
+                all_shared_features.extend(shared_feature_list)
 
     if all_shared_features:
         feature_counts = pd.Series(all_shared_features).value_counts().head(15)
@@ -227,6 +389,30 @@ def create_forensic_plots(summary_table: pd.DataFrame) -> None:
         plt.title("Top recurring shared indicators")
         plt.tight_layout()
         plt.savefig(FORENSIC_PLOT_DIR / "top_shared_indicators.png", dpi=150)
+        plt.close()
+
+    metric_columns = [
+        ("jaccard_similarity", "Jaccard"),
+        ("shap_fidelity", "SHAP Fidelity"),
+        ("lime_fidelity", "LIME Fidelity"),
+        ("shap_stability", "SHAP Stability"),
+        ("lime_stability", "LIME Stability"),
+    ]
+    available = [(col, name) for col, name in metric_columns if col in summary_table.columns and summary_table[col].notna().any()]
+
+    if available:
+        metric_names = []
+        metric_values = []
+        for col, display_name in available:
+            metric_names.append(display_name)
+            metric_values.append(float(summary_table[col].dropna().mean()))
+
+        plt.figure(figsize=(9, 5))
+        plt.bar(metric_names, metric_values)
+        plt.ylim(0, 1)
+        plt.title("Mean forensic explanation-quality metrics")
+        plt.tight_layout()
+        plt.savefig(FORENSIC_PLOT_DIR / "forensic_xai_quality_summary.png", dpi=150)
         plt.close()
 
 
@@ -266,13 +452,9 @@ def build_evidence_provenance_summary(
 
     prediction_copy = prediction_table.copy()
 
-    # Make sure the merge key exists on the prediction side.
     if "sample_row_index" not in prediction_copy.columns:
-        prediction_copy = prediction_copy.reset_index().rename(
-            columns={"index": "sample_row_index"}
-        )
+        prediction_copy = prediction_copy.reset_index().rename(columns={"index": "sample_row_index"})
 
-    # Make sure the merge key exists on the summary side too.
     if "sample_row_index" not in summary_table.columns:
         raise ValueError("summary_table is missing 'sample_row_index'.")
 
@@ -304,15 +486,8 @@ def build_feature_integrity_report() -> dict:
     feature_columns_path = SEQUENCE_DATA_DIR / "sequence_feature_columns.json"
     training_config_path = TRAINING_HISTORY_DIR / "training_config.json"
 
-    feature_payload = {}
-    if feature_columns_path.exists():
-        with open(feature_columns_path, "r", encoding="utf-8") as handle:
-            feature_payload = json.load(handle)
-
-    training_payload = {}
-    if training_config_path.exists():
-        with open(training_config_path, "r", encoding="utf-8") as handle:
-            training_payload = json.load(handle)
+    feature_payload = load_optional_json(feature_columns_path)
+    training_payload = load_optional_json(training_config_path)
 
     return {
         "feature_columns_file": str(feature_columns_path),
@@ -331,6 +506,7 @@ def build_reproducibility_checklist() -> dict:
         "sequence_metadata_exists": (SEQUENCE_DATA_DIR / "test_sequence_metadata.csv").exists(),
         "shap_output_exists": (SHAP_OUTPUT_DIR / "shap_global_feature_importance.csv").exists(),
         "lime_output_exists": (LIME_OUTPUT_DIR / "lime_explanation_summary.csv").exists(),
+        "xai_metrics_summary_exists": (XAI_METRICS_DIR / "xai_metrics_summary.json").exists(),
     }
     checks["all_required_files_present"] = all(checks.values())
     return checks
@@ -344,9 +520,40 @@ def build_decision_trace_summary(summary_table: pd.DataFrame) -> pd.DataFrame:
         "probability_normal",
         "probability_suspicious",
         "probability_attack",
+        "jaccard_similarity",
+        "shap_fidelity",
+        "lime_fidelity",
+        "shap_stability",
+        "lime_stability",
     ]
     available_columns = [column for column in columns_to_keep if column in summary_table.columns]
     return summary_table[available_columns].copy()
+
+
+def build_forensic_xai_quality_summary(
+    xai_metrics_summary: dict,
+    summary_table: pd.DataFrame,
+) -> dict:
+    result = {
+        "global_xai_metrics_summary": xai_metrics_summary,
+        "forensic_case_metric_means": {},
+    }
+
+    metric_columns = [
+        "jaccard_similarity",
+        "shap_fidelity",
+        "lime_fidelity",
+        "shap_stability",
+        "lime_stability",
+    ]
+
+    for column in metric_columns:
+        if column in summary_table.columns and summary_table[column].notna().any():
+            result["forensic_case_metric_means"][column] = float(summary_table[column].dropna().mean())
+        else:
+            result["forensic_case_metric_means"][column] = None
+
+    return result
 
 
 def main() -> None:
@@ -359,6 +566,12 @@ def main() -> None:
         shap_global_table,
         shap_local_summary_table,
         lime_summary_table,
+        xai_case_comparison_table,
+        shap_fidelity_table,
+        lime_fidelity_table,
+        shap_stability_table,
+        lime_stability_table,
+        xai_metrics_summary,
     ) = load_reporting_inputs()
 
     print_step("[STEP 2] Select suspicious and attack cases")
@@ -369,6 +582,11 @@ def main() -> None:
         forensic_cases_table,
         shap_local_summary_table,
         lime_summary_table,
+        xai_case_comparison_table,
+        shap_fidelity_table,
+        lime_fidelity_table,
+        shap_stability_table,
+        lime_stability_table,
     )
     summary_table = save_forensic_summary(forensic_records)
     create_forensic_plots(summary_table)
@@ -379,12 +597,14 @@ def main() -> None:
     feature_integrity_report = build_feature_integrity_report()
     reproducibility_checklist = build_reproducibility_checklist()
     decision_trace_summary = build_decision_trace_summary(summary_table)
+    forensic_xai_quality_summary = build_forensic_xai_quality_summary(xai_metrics_summary, summary_table)
 
     save_json(run_manifest, FORENSIC_AUDIT_DIR / "audit_run_manifest.json")
     evidence_provenance_table.to_csv(FORENSIC_AUDIT_DIR / "evidence_provenance_summary.csv", index=False)
     save_json(feature_integrity_report, FORENSIC_AUDIT_DIR / "feature_integrity_report.json")
     save_json(reproducibility_checklist, FORENSIC_AUDIT_DIR / "reproducibility_checklist.json")
     decision_trace_summary.to_csv(FORENSIC_AUDIT_DIR / "decision_trace_summary.csv", index=False)
+    save_json(forensic_xai_quality_summary, FORENSIC_AUDIT_DIR / "forensic_xai_quality_summary.json")
 
     print_step("[DONE]")
     print("[INFO] Forensic reporting completed successfully.")
