@@ -2,6 +2,12 @@
 
 This repository contains the cleaned FYP implementation for intrusion detection and forensic analysis using a CNN-GRU model with XAI outputs.
 
+## Prerequisites
+
+- Windows environment (commands below use Windows paths and `.bat` execution)
+- Python 3.10 or newer
+- Required Python packages installed in your active environment (virtual environment recommended)
+
 ## Pipeline Steps
 
 Current active scripts in order:
@@ -57,7 +63,13 @@ Implementation/
 
 ## Required Input Data
 
-Place UNSW-NB15 source files in `data/raw/`:
+Dataset download (not stored in this GitHub repo):
+
+- [UNSW-NB15 CSV download folder (SharePoint)](https://unsw-my.sharepoint.com/:f:/g/personal/z5025758_ad_unsw_edu_au/EnuQZZn3XuNBjgfcUu4DIVMBLCHyoLHqOswirpOQifr1ag?e=gKWkLS)
+
+Open the link, go to the `CSV Files` folder, and download the required CSV files. Then place them in `data/raw/` in this project.
+
+Required files in `data/raw/`:
 
 - `UNSW-NB15_1.csv`
 - `UNSW-NB15_2.csv`
@@ -66,6 +78,8 @@ Place UNSW-NB15 source files in `data/raw/`:
 - `NUSW-NB15_features.csv`
 
 Additional support files can remain in `data/raw/`.
+
+Use the exact filenames expected by the scripts (`UNSW-...` and `NUSW-...` as listed above).
 
 ## How To Run
 
@@ -91,6 +105,13 @@ Or run the full pipeline:
 ```bat
 run_pipeline.bat
 ```
+
+`run_pipeline.bat` automatically activates `.venv\Scripts\activate.bat` if that virtual environment exists.
+
+## Troubleshooting
+
+- If a script fails with missing file errors, confirm all required CSV files are in `data/raw/`.
+- If `python` is not recognized, install Python and/or activate your virtual environment before running scripts.
 
 ## Notes
 
