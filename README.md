@@ -86,7 +86,7 @@ Use the exact filenames expected by the scripts (`UNSW-...` and `NUSW-...` as li
 From project root:
 
 ```bat
-cd D:\Studies\IIT\FYP\Implementation
+cd path\to\Implementation
 ```
 
 Run step-by-step:
