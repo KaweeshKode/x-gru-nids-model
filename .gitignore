@@ -21,6 +21,10 @@ models/training_history/
 outputs/
 logs/
 
+# Test folder, keep the CSV inference check script
+tests/*
+!tests/run_csv_inference_check.py
+
 # Archives and legacy snapshots
 archive/*.rar
 archive/Implementation_v1/
