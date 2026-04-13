@@ -1,4 +1,3 @@
-
 import json
 from pathlib import Path
 
@@ -16,9 +15,10 @@ from sklearn.metrics import (
     auc,
 )
 
-
+# Base directory for the project.
 BASE_DIR = Path(__file__).resolve().parents[1]
 
+# Data directories.
 SEQUENCE_DATA_DIR = BASE_DIR / "data" / "sequences"
 TRAINED_MODEL_DIR = BASE_DIR / "models" / "trained_models"
 
@@ -31,6 +31,7 @@ XAI_METRICS_OUTPUT_DIR = BASE_DIR / "outputs" / "xai" / "metrics"
 EVALUATION_PLOT_DIR = BASE_DIR / "outputs" / "plots" / "evaluation"
 XAI_PLOT_DIR = BASE_DIR / "outputs" / "plots" / "xai"
 
+# Map class identifiers to readable names.
 CLASS_ID_TO_NAME = {
     0: "normal",
     1: "suspicious",
@@ -38,11 +39,13 @@ CLASS_ID_TO_NAME = {
 }
 CLASS_NAMES = ["normal", "suspicious", "attack"]
 
+# Configure the general evaluation and explanation settings.
 RANDOM_STATE = 42
 SHAP_BACKGROUND_SIZE = 50
 SHAP_EXPLAIN_SAMPLE_SIZE = 30
 LIME_SAMPLE_SIZE = 10
 
+# Configure the comparison metrics used to assess explanation fidelity and stability.
 FIDELITY_TOP_K = 15
 STABILITY_TOP_K = 10
 STABILITY_CASE_LIMIT = 5
@@ -50,12 +53,14 @@ STABILITY_REPEATS = 3
 STABILITY_NOISE_STD = 0.01
 
 
+# Print a formatted step header for better readability in logs.
 def print_step(title: str) -> None:
     print("\n" + "=" * 60)
     print(title)
     print("=" * 60)
 
 
+# Ensure that all output directories required by the evaluation and XAI stage.
 def create_folders() -> None:
     for folder in [
         EVALUATION_OUTPUT_DIR,
@@ -69,16 +74,20 @@ def create_folders() -> None:
         folder.mkdir(parents=True, exist_ok=True)
 
 
+# Save structured evaluation or explanation metadata in JSON format
 def save_json(payload: dict, path: Path) -> None:
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2)
 
 
+# Load the trained CNN-GRU model produced in the previous stage
 def load_trained_model():
     model_path = TRAINED_MODEL_DIR / "cnn_gru_intrusion_model.keras"
     return tf.keras.models.load_model(model_path)
 
 
+# Load the test sequence tensors, test labels, sequence-level metadata, and
+# sequence feature-column list required for evaluation and XAI analysis.
 def load_test_artifacts():
     X_test = np.load(SEQUENCE_DATA_DIR / "X_test_sequences.npy")
     y_test = np.load(SEQUENCE_DATA_DIR / "y_test_labels.npy")
@@ -86,19 +95,25 @@ def load_test_artifacts():
 
     with open(SEQUENCE_DATA_DIR / "sequence_feature_columns.json", "r", encoding="utf-8") as handle:
         feature_columns_payload = json.load(handle)
-
+    
     feature_columns = feature_columns_payload["feature_columns"]
+    
     return X_test, y_test, test_sequence_metadata, feature_columns
 
 
+# Generate class-probability predictions for the full test sequence set.
 def predict_test_probabilities(model, X_test: np.ndarray) -> np.ndarray:
     return model.predict(X_test, verbose=0)
 
 
+# Convert predicted class probabilities into discrete label IDs by selecting
+# the highest-probability class for each test sequence.
 def convert_probabilities_to_labels(predicted_probabilities: np.ndarray) -> np.ndarray:
     return np.argmax(predicted_probabilities, axis=1)
 
 
+# Evaluate the model in the full three-class setting and return the class-wise
+# report together with the confusion matrix for detailed performance analysis.
 def evaluate_three_class_performance(y_test: np.ndarray, predicted_labels: np.ndarray):
     report_dict = classification_report(
         y_test,
@@ -109,6 +124,7 @@ def evaluate_three_class_performance(y_test: np.ndarray, predicted_labels: np.nd
         output_dict=True,
         zero_division=0,
     )
+    
     report_text = classification_report(
         y_test,
         predicted_labels,
@@ -117,11 +133,17 @@ def evaluate_three_class_performance(y_test: np.ndarray, predicted_labels: np.nd
         digits=4,
         zero_division=0,
     )
+    
+    # Summarize prediction outcomes across the three target classes.
     confusion = confusion_matrix(y_test, predicted_labels, labels=[0, 1, 2])
+    
     return report_dict, report_text, confusion
 
 
+# Evaluate the predictions in a reduced binary view by treating suspicious and
+# attack classes as attack-like traffic for comparison with the original binary setting.
 def evaluate_binary_performance(y_test: np.ndarray, predicted_labels: np.ndarray):
+    # Treat suspicious and attack predictions as attack-like traffic.
     true_binary = np.where(y_test == 0, 0, 1)
     predicted_binary = np.where(predicted_labels == 0, 0, 1)
 
@@ -134,6 +156,7 @@ def evaluate_binary_performance(y_test: np.ndarray, predicted_labels: np.ndarray
         output_dict=True,
         zero_division=0,
     )
+    
     report_text = classification_report(
         true_binary,
         predicted_binary,
@@ -142,10 +165,14 @@ def evaluate_binary_performance(y_test: np.ndarray, predicted_labels: np.ndarray
         digits=4,
         zero_division=0,
     )
+    
+    # Summarize prediction outcomes in the binary evaluation view.
     confusion = confusion_matrix(true_binary, predicted_binary, labels=[0, 1])
+    
     return report_dict, report_text, confusion
 
 
+# Save the test predictions, numeric evaluation summaries, and text reports.
 def save_evaluation_outputs(
     prediction_table: pd.DataFrame,
     metrics_3class: dict,
@@ -165,19 +192,22 @@ def save_evaluation_outputs(
         handle.write(report_binary_text)
 
 
+# Render and save a confusion-matrix heatmap.
 def create_confusion_matrix_plot(confusion: np.ndarray, labels: list[str], output_path: Path, title: str) -> None:
     plt.figure(figsize=(6, 5))
     plt.imshow(confusion, interpolation="nearest")
     plt.title(title)
     plt.colorbar()
+    
     tick_positions = np.arange(len(labels))
     plt.xticks(tick_positions, labels, rotation=45)
     plt.yticks(tick_positions, labels)
-
+    
+    # Write the raw counts into each matrix cell.
     for row_index in range(confusion.shape[0]):
         for column_index in range(confusion.shape[1]):
             plt.text(column_index, row_index, int(confusion[row_index, column_index]), ha="center", va="center")
-
+    
     plt.xlabel("Predicted")
     plt.ylabel("True")
     plt.tight_layout()
@@ -185,6 +215,8 @@ def create_confusion_matrix_plot(confusion: np.ndarray, labels: list[str], outpu
     plt.close()
 
 
+# Create the main evaluation plots, including confusion matrices and binary ROC
+# and precision-recall curves derived from attack-like prediction scores.
 def create_evaluation_plots(
     y_test: np.ndarray,
     predicted_probabilities: np.ndarray,
@@ -204,13 +236,14 @@ def create_evaluation_plots(
         EVALUATION_PLOT_DIR / "confusion_matrix_binary.png",
         "Binary confusion matrix",
     )
-
+    
+    # Collapse the three-class ground truth into a binary evaluation view.
     true_binary = np.where(y_test == 0, 0, 1)
     attack_like_score = predicted_probabilities[:, 1] + predicted_probabilities[:, 2]
 
     fpr, tpr, _ = roc_curve(true_binary, attack_like_score)
     roc_auc = auc(fpr, tpr)
-
+    
     plt.figure(figsize=(7, 5))
     plt.plot(fpr, tpr, label=f"AUC = {roc_auc:.4f}")
     plt.plot([0, 1], [0, 1], linestyle="--")
@@ -221,8 +254,9 @@ def create_evaluation_plots(
     plt.tight_layout()
     plt.savefig(EVALUATION_PLOT_DIR / "roc_curve_binary.png", dpi=150)
     plt.close()
-
+    
     precision, recall, _ = precision_recall_curve(true_binary, attack_like_score)
+    
     plt.figure(figsize=(7, 5))
     plt.plot(recall, precision)
     plt.xlabel("Recall")
@@ -233,23 +267,35 @@ def create_evaluation_plots(
     plt.close()
 
 
-def flatten_sequences_for_xai(X_sequences: np.ndarray, feature_columns: list[str]) -> tuple[np.ndarray, list[str]]:
+# Flatten each sequence into a single row so SHAP and LIME can work with a
+# tabular representation of the temporal input.
+def flatten_sequences_for_xai(
+    X_sequences: np.ndarray, feature_columns: list[str]
+) -> tuple[np.ndarray, list[str]]:
     sequence_length = X_sequences.shape[1]
     flat_feature_names = []
+    
+    # Prefix each feature with its time-step position.
     for time_index in range(sequence_length):
         for feature_name in feature_columns:
             flat_feature_names.append(f"t{time_index}_{feature_name}")
+    
     flattened = X_sequences.reshape(X_sequences.shape[0], -1)
     return flattened, flat_feature_names
 
 
+# Build a prediction wrapper that reshapes flattened XAI inputs back into the
+# original sequence format expected by the CNN-GRU model.
 def _predict_from_flattened_sequences_factory(model, input_shape):
     def predict_from_flattened_sequences(flattened_input: np.ndarray) -> np.ndarray:
         reshaped_input = flattened_input.reshape((-1, input_shape[0], input_shape[1]))
         return model.predict(reshaped_input, verbose=0)
+
     return predict_from_flattened_sequences
 
 
+# Remove the time-step prefix from a flattened feature name so explanations can
+# also be summarized at the base-feature level.
 def _base_feature_from_flat(feature_name: str) -> str:
     text = str(feature_name)
     if "_" in text and text.startswith("t"):
@@ -257,6 +303,8 @@ def _base_feature_from_flat(feature_name: str) -> str:
     return text
 
 
+# Normalize LIME feature descriptions by extracting the actual flattened feature
+# name from threshold-based textual conditions.
 def _normalize_lime_feature_name(condition_or_feature: str) -> str:
     cleaned = str(condition_or_feature)
     for operator in ["<=", ">=", "<", ">", "="]:
@@ -270,6 +318,9 @@ def _normalize_lime_feature_name(condition_or_feature: str) -> str:
     return cleaned.strip()
 
 
+
+# Generate SHAP-based global and local explanations for selected test sequences
+# and save the explanation outputs for later forensic analysis.
 def generate_shap_explanations(
     model,
     X_test: np.ndarray,
@@ -277,31 +328,43 @@ def generate_shap_explanations(
     feature_columns: list[str],
     prediction_table: pd.DataFrame,
 ):
-    flattened_test, flat_feature_names = flatten_sequences_for_xai(X_test, feature_columns)
+    flattened_test, flat_feature_names = flatten_sequences_for_xai(
+        X_test, feature_columns
+    )
     input_shape = X_test.shape[1:]
-    predict_from_flattened_sequences = _predict_from_flattened_sequences_factory(model, input_shape)
+    predict_from_flattened_sequences = _predict_from_flattened_sequences_factory(
+        model, input_shape
+    )
 
     np.random.seed(RANDOM_STATE)
 
     background_size = min(SHAP_BACKGROUND_SIZE, len(flattened_test))
     explain_size = min(SHAP_EXPLAIN_SAMPLE_SIZE, len(flattened_test))
-
-    background_indices = np.random.choice(len(flattened_test), size=background_size, replace=False)
-    explain_indices = np.random.choice(len(flattened_test), size=explain_size, replace=False)
+    
+    # Randomly select background and explanation samples.
+    background_indices = np.random.choice(
+        len(flattened_test), size=background_size, replace=False
+    )
+    explain_indices = np.random.choice(
+        len(flattened_test), size=explain_size, replace=False
+    )
 
     background_data = flattened_test[background_indices]
     explain_data = flattened_test[explain_indices]
 
     explainer = shap.KernelExplainer(predict_from_flattened_sequences, background_data)
     shap_values = explainer.shap_values(explain_data, nsamples=100)
-
+    
+    # Convert SHAP output into a consistent 3D array format.
     if isinstance(shap_values, list):
         shap_array = np.stack(shap_values, axis=0)
         shap_array = np.transpose(shap_array, (1, 2, 0))
     else:
         shap_array = shap_values
 
-    predicted_labels_for_explained = prediction_table.iloc[explain_indices]["predicted_label_id"].values
+    predicted_labels_for_explained = prediction_table.iloc[explain_indices][
+        "predicted_label_id"
+    ].values
 
     global_rows = []
     for flat_feature_index, flat_feature_name in enumerate(flat_feature_names):
@@ -313,18 +376,25 @@ def generate_shap_explanations(
                 "mean_absolute_shap_value": mean_abs_value,
             }
         )
-
-    global_importance_table = pd.DataFrame(global_rows).sort_values(
-        "mean_absolute_shap_value",
-        ascending=False,
-    ).reset_index(drop=True)
+    
+    global_importance_table = (
+        pd.DataFrame(global_rows)
+        .sort_values(
+            "mean_absolute_shap_value",
+            ascending=False,
+        )
+        .reset_index(drop=True)
+    )
     global_importance_table.to_csv(
         SHAP_OUTPUT_DIR / "shap_global_feature_importance.csv",
         index=False,
     )
-
+    
+    # Aggregate flattened features back to base-feature importance.
     global_base_table = (
-        global_importance_table.groupby("base_feature", as_index=False)["mean_absolute_shap_value"]
+        global_importance_table.groupby("base_feature", as_index=False)[
+            "mean_absolute_shap_value"
+        ]
         .sum()
         .sort_values("mean_absolute_shap_value", ascending=False)
         .reset_index(drop=True)
@@ -333,7 +403,7 @@ def generate_shap_explanations(
         SHAP_OUTPUT_DIR / "shap_global_base_feature_importance.csv",
         index=False,
     )
-
+    
     plt.figure(figsize=(10, 6))
     top_global = global_importance_table.head(20).iloc[::-1]
     plt.barh(top_global["flat_feature"], top_global["mean_absolute_shap_value"])
@@ -344,7 +414,9 @@ def generate_shap_explanations(
 
     plt.figure(figsize=(10, 6))
     top_global_base = global_base_table.head(20).iloc[::-1]
-    plt.barh(top_global_base["base_feature"], top_global_base["mean_absolute_shap_value"])
+    plt.barh(
+        top_global_base["base_feature"], top_global_base["mean_absolute_shap_value"]
+    )
     plt.title("Top 20 SHAP global base features")
     plt.tight_layout()
     plt.savefig(XAI_PLOT_DIR / "shap_global_base_feature_importance.png", dpi=150)
@@ -359,15 +431,21 @@ def generate_shap_explanations(
         local_feature_values = explain_data[local_index]
         local_shap_values = shap_array[local_index, :, sample_predicted_class]
 
-        local_table = pd.DataFrame(
-            {
-                "flat_feature": flat_feature_names,
-                "base_feature": [_base_feature_from_flat(name) for name in flat_feature_names],
-                "input_value": local_feature_values,
-                "shap_value_for_predicted_class": local_shap_values,
-                "absolute_shap_value": np.abs(local_shap_values),
-            }
-        ).sort_values("absolute_shap_value", ascending=False).reset_index(drop=True)
+        local_table = (
+            pd.DataFrame(
+                {
+                    "flat_feature": flat_feature_names,
+                    "base_feature": [
+                        _base_feature_from_flat(name) for name in flat_feature_names
+                    ],
+                    "input_value": local_feature_values,
+                    "shap_value_for_predicted_class": local_shap_values,
+                    "absolute_shap_value": np.abs(local_shap_values),
+                }
+            )
+            .sort_values("absolute_shap_value", ascending=False)
+            .reset_index(drop=True)
+        )
 
         file_suffix = f"{local_index + 1:03d}"
         local_table.to_csv(
@@ -384,11 +462,14 @@ def generate_shap_explanations(
             },
             SHAP_OUTPUT_DIR / f"shap_local_explanation_sample_{file_suffix}.json",
         )
-
+        
+        # Plot only the first local explanation as a representative example.
         if local_index == 0:
             plt.figure(figsize=(10, 6))
             top_local = local_table.head(15).iloc[::-1]
-            plt.barh(top_local["flat_feature"], top_local["shap_value_for_predicted_class"])
+            plt.barh(
+                top_local["flat_feature"], top_local["shap_value_for_predicted_class"]
+            )
             plt.title("SHAP local explanation sample 001")
             plt.tight_layout()
             plt.savefig(XAI_PLOT_DIR / "shap_local_explanation_sample_001.png", dpi=150)
@@ -412,16 +493,24 @@ def generate_shap_explanations(
             {
                 "sample_row_index": sample_row_index,
                 "true_label_id": int(y_test[sample_row_index]),
-                "predicted_label_id": int(prediction_table.iloc[sample_row_index]["predicted_label_id"]),
-                "predicted_label_name": str(prediction_table.iloc[sample_row_index]["predicted_label_name"]),
+                "predicted_label_id": int(
+                    prediction_table.iloc[sample_row_index]["predicted_label_id"]
+                ),
+                "predicted_label_name": str(
+                    prediction_table.iloc[sample_row_index]["predicted_label_name"]
+                ),
             }
         )
 
     shap_local_summary_table = pd.DataFrame(local_rows)
-    shap_local_summary_table.to_csv(SHAP_OUTPUT_DIR / "shap_local_summary.csv", index=False)
+    shap_local_summary_table.to_csv(
+        SHAP_OUTPUT_DIR / "shap_local_summary.csv", index=False
+    )
 
     explained_samples_table = pd.DataFrame(explained_rows)
-    explained_samples_table.to_csv(SHAP_OUTPUT_DIR / "shap_explained_samples.csv", index=False)
+    explained_samples_table.to_csv(
+        SHAP_OUTPUT_DIR / "shap_explained_samples.csv", index=False
+    )
 
     return {
         "global_importance_table": global_importance_table,
@@ -433,6 +522,8 @@ def generate_shap_explanations(
     }
 
 
+# Generate LIME-based local explanations for suspicious or attack-like cases and
+# save compact explanation outputs for later comparison with SHAP.
 def generate_lime_explanations(
     model,
     X_test: np.ndarray,
@@ -440,10 +531,15 @@ def generate_lime_explanations(
     feature_columns: list[str],
     prediction_table: pd.DataFrame,
 ):
-    flattened_test, flat_feature_names = flatten_sequences_for_xai(X_test, feature_columns)
+    flattened_test, flat_feature_names = flatten_sequences_for_xai(
+        X_test, feature_columns
+    )
     input_shape = X_test.shape[1:]
-    predict_from_flattened_sequences = _predict_from_flattened_sequences_factory(model, input_shape)
-
+    predict_from_flattened_sequences = _predict_from_flattened_sequences_factory(
+        model, input_shape
+    )
+    
+    # Focus LIME on suspicious and attack predictions.
     suspicious_or_attack_indices = prediction_table.index[
         prediction_table["predicted_label_name"].isin(["suspicious", "attack"])
     ].tolist()
@@ -471,7 +567,9 @@ def generate_lime_explanations(
 
     for case_number, sample_row_index in enumerate(selected_indices, start=1):
         local_instance = flattened_test[int(sample_row_index)]
-        predicted_class = int(prediction_table.iloc[int(sample_row_index)]["predicted_label_id"])
+        predicted_class = int(
+            prediction_table.iloc[int(sample_row_index)]["predicted_label_id"]
+        )
 
         explanation = explainer.explain_instance(
             data_row=local_instance,
@@ -482,18 +580,33 @@ def generate_lime_explanations(
 
         local_items = explanation.as_list(label=predicted_class)
 
-        local_table = pd.DataFrame(
-            {
-                "condition_or_feature": [item[0] for item in local_items],
-                "normalized_feature": [_normalize_lime_feature_name(item[0]) for item in local_items],
-                "base_feature": [_base_feature_from_flat(_normalize_lime_feature_name(item[0])) for item in local_items],
-                "lime_weight": [float(item[1]) for item in local_items],
-                "absolute_lime_weight": [abs(float(item[1])) for item in local_items],
-            }
-        ).sort_values("absolute_lime_weight", ascending=False).reset_index(drop=True)
+        local_table = (
+            pd.DataFrame(
+                {
+                    "condition_or_feature": [item[0] for item in local_items],
+                    "normalized_feature": [
+                        _normalize_lime_feature_name(item[0]) for item in local_items
+                    ],
+                    "base_feature": [
+                        _base_feature_from_flat(_normalize_lime_feature_name(item[0]))
+                        for item in local_items
+                    ],
+                    "lime_weight": [float(item[1]) for item in local_items],
+                    "absolute_lime_weight": [
+                        abs(float(item[1])) for item in local_items
+                    ],
+                }
+            )
+            .sort_values("absolute_lime_weight", ascending=False)
+            .reset_index(drop=True)
+        )
 
-        local_csv_path = LIME_OUTPUT_DIR / f"lime_local_explanation_case_{case_number:03d}.csv"
-        local_json_path = LIME_OUTPUT_DIR / f"lime_local_explanation_case_{case_number:03d}.json"
+        local_csv_path = (
+            LIME_OUTPUT_DIR / f"lime_local_explanation_case_{case_number:03d}.csv"
+        )
+        local_json_path = (
+            LIME_OUTPUT_DIR / f"lime_local_explanation_case_{case_number:03d}.json"
+        )
 
         local_table.to_csv(local_csv_path, index=False)
         save_json(
@@ -505,14 +618,18 @@ def generate_lime_explanations(
             },
             local_json_path,
         )
-
+        
+        # Plot only the first LIME case as a representative example.
         if case_number == 1:
             plt.figure(figsize=(10, 6))
             top_local = local_table.head(15).iloc[::-1]
             plt.barh(top_local["condition_or_feature"], top_local["lime_weight"])
             plt.title(f"LIME local explanation case {case_number:03d}")
             plt.tight_layout()
-            plt.savefig(XAI_PLOT_DIR / f"lime_local_explanation_case_{case_number:03d}.png", dpi=150)
+            plt.savefig(
+                XAI_PLOT_DIR / f"lime_local_explanation_case_{case_number:03d}.png",
+                dpi=150,
+            )
             plt.close()
 
         for rank_index, row in local_table.head(15).iterrows():
@@ -531,7 +648,9 @@ def generate_lime_explanations(
             )
 
     lime_summary_table = pd.DataFrame(summary_rows)
-    lime_summary_table.to_csv(LIME_OUTPUT_DIR / "lime_explanation_summary.csv", index=False)
+    lime_summary_table.to_csv(
+        LIME_OUTPUT_DIR / "lime_explanation_summary.csv", index=False
+    )
 
     return {
         "lime_summary_table": lime_summary_table,
@@ -540,6 +659,8 @@ def generate_lime_explanations(
     }
 
 
+# Compare SHAP and LIME local explanations on the cases they both explained
+# so their overlap and practical differences can be summarized.
 def compare_xai_methods(
     shap_results: dict,
     lime_results: dict,
@@ -550,22 +671,35 @@ def compare_xai_methods(
 
     case_level_rows = []
 
-    shap_case_ids = set(shap_local_table["sample_row_index"].unique()) if not shap_local_table.empty else set()
-    lime_case_ids = set(lime_summary_table["sample_row_index"].unique()) if not lime_summary_table.empty else set()
+    shap_case_ids = (
+        set(shap_local_table["sample_row_index"].unique())
+        if not shap_local_table.empty
+        else set()
+    )
+    lime_case_ids = (
+        set(lime_summary_table["sample_row_index"].unique())
+        if not lime_summary_table.empty
+        else set()
+    )
     common_case_ids = sorted(shap_case_ids.intersection(lime_case_ids))
 
     print(f"[INFO] Common SHAP/LIME local cases available: {len(common_case_ids)}")
 
     for case_id in common_case_ids:
-        shap_case = shap_local_table[shap_local_table["sample_row_index"] == case_id].copy()
-        lime_case = lime_summary_table[lime_summary_table["sample_row_index"] == case_id].copy()
+        shap_case = shap_local_table[
+            shap_local_table["sample_row_index"] == case_id
+        ].copy()
+        lime_case = lime_summary_table[
+            lime_summary_table["sample_row_index"] == case_id
+        ].copy()
 
         shap_features = set(shap_case["flat_feature"].astype(str).tolist())
         lime_features = set(lime_case["normalized_feature"].astype(str).tolist())
 
         if not shap_features and not lime_features:
             continue
-
+        
+        # Measure feature overlap using Jaccard similarity.
         intersection = shap_features.intersection(lime_features)
         union = shap_features.union(lime_features)
         jaccard_similarity = (len(intersection) / len(union)) if union else 0.0
@@ -573,7 +707,9 @@ def compare_xai_methods(
         case_level_rows.append(
             {
                 "sample_row_index": int(case_id),
-                "predicted_label_name": str(prediction_table.iloc[int(case_id)]["predicted_label_name"]),
+                "predicted_label_name": str(
+                    prediction_table.iloc[int(case_id)]["predicted_label_name"]
+                ),
                 "shap_feature_count": len(shap_features),
                 "lime_feature_count": len(lime_features),
                 "shared_feature_count": len(intersection),
@@ -583,7 +719,9 @@ def compare_xai_methods(
         )
 
     case_level_table = pd.DataFrame(case_level_rows)
-    case_level_table.to_csv(XAI_COMPARISON_OUTPUT_DIR / "xai_case_level_comparison.csv", index=False)
+    case_level_table.to_csv(
+        XAI_COMPARISON_OUTPUT_DIR / "xai_case_level_comparison.csv", index=False
+    )
 
     mean_jaccard_similarity = (
         float(case_level_table["jaccard_similarity"].mean())
@@ -624,7 +762,9 @@ def compare_xai_methods(
         index=False,
     )
 
-    with open(XAI_COMPARISON_OUTPUT_DIR / "xai_comparison_summary.txt", "w", encoding="utf-8") as handle:
+    with open(
+        XAI_COMPARISON_OUTPUT_DIR / "xai_comparison_summary.txt", "w", encoding="utf-8"
+    ) as handle:
         handle.write("XAI comparison summary\n")
         handle.write("======================\n")
         handle.write(f"SHAP local cases: {len(shap_case_ids)}\n")
@@ -646,20 +786,37 @@ def compare_xai_methods(
         "mean_jaccard_similarity": mean_jaccard_similarity,
     }
 
-
+# Extract the top SHAP-ranked flattened features for one explained case.
 def _top_features_from_shap_case(shap_case: pd.DataFrame, top_k: int) -> list[str]:
     if shap_case.empty:
         return []
-    return shap_case.sort_values("absolute_shap_value", ascending=False)["flat_feature"].astype(str).head(top_k).tolist()
+    return (
+        shap_case.sort_values("absolute_shap_value", ascending=False)["flat_feature"]
+        .astype(str)
+        .head(top_k)
+        .tolist()
+    )
 
 
+# Extract the top LIME-ranked normalized features for one explained case.
 def _top_features_from_lime_case(lime_case: pd.DataFrame, top_k: int) -> list[str]:
     if lime_case.empty:
         return []
-    return lime_case.sort_values("absolute_lime_weight", ascending=False)["normalized_feature"].astype(str).head(top_k).tolist()
+    return (
+        lime_case.sort_values("absolute_lime_weight", ascending=False)[
+            "normalized_feature"
+        ]
+        .astype(str)
+        .head(top_k)
+        .tolist()
+    )
 
 
-def _mask_flattened_instance(flat_instance: np.ndarray, keep_features: set[str], flat_feature_names: list[str]) -> np.ndarray:
+# Keep only the selected top features in a flattened instance so explanation
+# fidelity can be estimated by masking all other inputs.
+def _mask_flattened_instance(
+    flat_instance: np.ndarray, keep_features: set[str], flat_feature_names: list[str]
+) -> np.ndarray:
     masked = np.zeros_like(flat_instance)
     for index, name in enumerate(flat_feature_names):
         if name in keep_features:
@@ -667,6 +824,8 @@ def _mask_flattened_instance(flat_instance: np.ndarray, keep_features: set[str],
     return masked
 
 
+# Estimate explanation fidelity by checking how well the model's predicted-class
+# probability is preserved when only the top explained features are kept.
 def compute_fidelity_metrics(
     model,
     X_test: np.ndarray,
@@ -675,32 +834,52 @@ def compute_fidelity_metrics(
     lime_results: dict,
     feature_columns: list[str],
 ):
-    flattened_test, flat_feature_names = flatten_sequences_for_xai(X_test, feature_columns)
+    flattened_test, flat_feature_names = flatten_sequences_for_xai(
+        X_test, feature_columns
+    )
     input_shape = X_test.shape[1:]
-    predict_from_flattened_sequences = _predict_from_flattened_sequences_factory(model, input_shape)
+    predict_from_flattened_sequences = _predict_from_flattened_sequences_factory(
+        model, input_shape
+    )
 
     shap_local_table = shap_results["local_summary_table"].copy()
     lime_summary_table = lime_results["lime_summary_table"].copy()
 
     shap_rows = []
-    for case_id in sorted(shap_local_table["sample_row_index"].unique()) if not shap_local_table.empty else []:
+    for case_id in (
+        sorted(shap_local_table["sample_row_index"].unique())
+        if not shap_local_table.empty
+        else []
+    ):
         case_id = int(case_id)
         shap_case = shap_local_table[shap_local_table["sample_row_index"] == case_id]
         top_features = set(_top_features_from_shap_case(shap_case, FIDELITY_TOP_K))
         if not top_features:
             continue
         original_instance = flattened_test[case_id]
-        masked_instance = _mask_flattened_instance(original_instance, top_features, flat_feature_names)
+        masked_instance = _mask_flattened_instance(
+            original_instance, top_features, flat_feature_names
+        )
         predicted_class = int(prediction_table.iloc[case_id]["predicted_label_id"])
 
-        original_probability = float(predict_from_flattened_sequences(original_instance.reshape(1, -1))[0, predicted_class])
-        masked_probability = float(predict_from_flattened_sequences(masked_instance.reshape(1, -1))[0, predicted_class])
+        original_probability = float(
+            predict_from_flattened_sequences(original_instance.reshape(1, -1))[
+                0, predicted_class
+            ]
+        )
+        masked_probability = float(
+            predict_from_flattened_sequences(masked_instance.reshape(1, -1))[
+                0, predicted_class
+            ]
+        )
 
         fidelity_score = max(0.0, 1.0 - abs(original_probability - masked_probability))
         shap_rows.append(
             {
                 "sample_row_index": case_id,
-                "predicted_label_name": str(prediction_table.iloc[case_id]["predicted_label_name"]),
+                "predicted_label_name": str(
+                    prediction_table.iloc[case_id]["predicted_label_name"]
+                ),
                 "original_probability": original_probability,
                 "masked_probability": masked_probability,
                 "fidelity_score": fidelity_score,
@@ -708,24 +887,43 @@ def compute_fidelity_metrics(
         )
 
     lime_rows = []
-    for case_id in sorted(lime_summary_table["sample_row_index"].unique()) if not lime_summary_table.empty else []:
+    for case_id in (
+        sorted(lime_summary_table["sample_row_index"].unique())
+        if not lime_summary_table.empty
+        else []
+    ):
         case_id = int(case_id)
-        lime_case = lime_summary_table[lime_summary_table["sample_row_index"] == case_id]
+        lime_case = lime_summary_table[
+            lime_summary_table["sample_row_index"] == case_id
+        ]
         top_features = set(_top_features_from_lime_case(lime_case, FIDELITY_TOP_K))
         if not top_features:
             continue
+        
         original_instance = flattened_test[case_id]
-        masked_instance = _mask_flattened_instance(original_instance, top_features, flat_feature_names)
+        masked_instance = _mask_flattened_instance(
+            original_instance, top_features, flat_feature_names
+        )
         predicted_class = int(prediction_table.iloc[case_id]["predicted_label_id"])
 
-        original_probability = float(predict_from_flattened_sequences(original_instance.reshape(1, -1))[0, predicted_class])
-        masked_probability = float(predict_from_flattened_sequences(masked_instance.reshape(1, -1))[0, predicted_class])
+        original_probability = float(
+            predict_from_flattened_sequences(original_instance.reshape(1, -1))[
+                0, predicted_class
+            ]
+        )
+        masked_probability = float(
+            predict_from_flattened_sequences(masked_instance.reshape(1, -1))[
+                0, predicted_class
+            ]
+        )
 
         fidelity_score = max(0.0, 1.0 - abs(original_probability - masked_probability))
         lime_rows.append(
             {
                 "sample_row_index": case_id,
-                "predicted_label_name": str(prediction_table.iloc[case_id]["predicted_label_name"]),
+                "predicted_label_name": str(
+                    prediction_table.iloc[case_id]["predicted_label_name"]
+                ),
                 "original_probability": original_probability,
                 "masked_probability": masked_probability,
                 "fidelity_score": fidelity_score,
@@ -735,43 +933,73 @@ def compute_fidelity_metrics(
     shap_fidelity_table = pd.DataFrame(shap_rows)
     lime_fidelity_table = pd.DataFrame(lime_rows)
 
-    shap_fidelity_table.to_csv(XAI_METRICS_OUTPUT_DIR / "shap_fidelity_scores.csv", index=False)
-    lime_fidelity_table.to_csv(XAI_METRICS_OUTPUT_DIR / "lime_fidelity_scores.csv", index=False)
+    shap_fidelity_table.to_csv(
+        XAI_METRICS_OUTPUT_DIR / "shap_fidelity_scores.csv", index=False
+    )
+    lime_fidelity_table.to_csv(
+        XAI_METRICS_OUTPUT_DIR / "lime_fidelity_scores.csv", index=False
+    )
 
     return {
         "shap_fidelity_table": shap_fidelity_table,
         "lime_fidelity_table": lime_fidelity_table,
-        "mean_shap_fidelity": float(shap_fidelity_table["fidelity_score"].mean()) if not shap_fidelity_table.empty else None,
-        "mean_lime_fidelity": float(lime_fidelity_table["fidelity_score"].mean()) if not lime_fidelity_table.empty else None,
+        "mean_shap_fidelity": float(shap_fidelity_table["fidelity_score"].mean())
+        if not shap_fidelity_table.empty
+        else None,
+        "mean_lime_fidelity": float(lime_fidelity_table["fidelity_score"].mean())
+        if not lime_fidelity_table.empty
+        else None,
     }
 
 
-def _compute_shap_top_features_for_instance(model, background_data, instance_flat, predicted_class, flat_feature_names, top_k):
+# Recompute SHAP top features for one perturbed instance so explanation stability
+# can be measured across repeated noisy variants of the same case.
+def _compute_shap_top_features_for_instance(
+    model, background_data, instance_flat, predicted_class, flat_feature_names, top_k
+):
     def predict_fn(flattened_input: np.ndarray) -> np.ndarray:
-        reshaped_input = flattened_input.reshape((-1, background_data.shape[1] // len(flat_feature_names) if False else model.input_shape[1], model.input_shape[2]))
+        reshaped_input = flattened_input.reshape(
+            (
+                -1,
+                background_data.shape[1] // len(flat_feature_names)
+                if False
+                else model.input_shape[1],
+                model.input_shape[2],
+            )
+        )
         return model.predict(reshaped_input, verbose=0)
-    # avoid shape confusion; use direct closure from model.input_shape
+
+    # Keep the reshape dimensions aligned with the trained model input.
     sequence_length = model.input_shape[1]
     feature_count = model.input_shape[2]
+
     def predict_fn(flattened_input: np.ndarray) -> np.ndarray:
         reshaped_input = flattened_input.reshape((-1, sequence_length, feature_count))
         return model.predict(reshaped_input, verbose=0)
+
     explainer = shap.KernelExplainer(predict_fn, background_data)
     shap_values = explainer.shap_values(instance_flat.reshape(1, -1), nsamples=100)
+    
     if isinstance(shap_values, list):
         local_values = np.asarray(shap_values[predicted_class]).reshape(-1)
     else:
         local_values = np.asarray(shap_values)[0, :, predicted_class]
+    
     local_table = pd.DataFrame(
         {
             "flat_feature": flat_feature_names,
             "absolute_value": np.abs(local_values),
         }
     ).sort_values("absolute_value", ascending=False)
+    
     return set(local_table["flat_feature"].astype(str).head(top_k).tolist())
 
 
-def _compute_lime_top_features_for_instance(explainer, predict_fn, instance_flat, predicted_class, top_k):
+# Recompute LIME top features for one perturbed instance so repeated
+# explanation overlap can be measured.
+def _compute_lime_top_features_for_instance(
+    explainer, predict_fn, instance_flat, predicted_class, top_k
+):
     explanation = explainer.explain_instance(
         data_row=instance_flat,
         predict_fn=predict_fn,
@@ -783,6 +1011,8 @@ def _compute_lime_top_features_for_instance(explainer, predict_fn, instance_flat
     return set(normalized[:top_k])
 
 
+# Estimate explanation stability by perturbing the same input multiple times and
+# measuring the overlap of top features across repeated SHAP and LIME runs.
 def compute_stability_metrics(
     model,
     X_test: np.ndarray,
@@ -791,19 +1021,33 @@ def compute_stability_metrics(
     lime_results: dict,
     feature_columns: list[str],
 ):
-    flattened_test, flat_feature_names = flatten_sequences_for_xai(X_test, feature_columns)
+    flattened_test, flat_feature_names = flatten_sequences_for_xai(
+        X_test, feature_columns
+    )
     input_shape = X_test.shape[1:]
-    predict_from_flattened_sequences = _predict_from_flattened_sequences_factory(model, input_shape)
+    predict_from_flattened_sequences = _predict_from_flattened_sequences_factory(
+        model, input_shape
+    )
 
-    shap_case_ids = sorted(shap_results["local_summary_table"]["sample_row_index"].unique()) if not shap_results["local_summary_table"].empty else []
-    lime_case_ids = sorted(lime_results["lime_summary_table"]["sample_row_index"].unique()) if not lime_results["lime_summary_table"].empty else []
+    shap_case_ids = (
+        sorted(shap_results["local_summary_table"]["sample_row_index"].unique())
+        if not shap_results["local_summary_table"].empty
+        else []
+    )
+    lime_case_ids = (
+        sorted(lime_results["lime_summary_table"]["sample_row_index"].unique())
+        if not lime_results["lime_summary_table"].empty
+        else []
+    )
 
     shap_case_ids = [int(x) for x in shap_case_ids[:STABILITY_CASE_LIMIT]]
     lime_case_ids = [int(x) for x in lime_case_ids[:STABILITY_CASE_LIMIT]]
 
     np.random.seed(RANDOM_STATE)
     background_size = min(SHAP_BACKGROUND_SIZE, len(flattened_test))
-    background_indices = np.random.choice(len(flattened_test), size=background_size, replace=False)
+    background_indices = np.random.choice(
+        len(flattened_test), size=background_size, replace=False
+    )
     background_data = flattened_test[background_indices]
 
     shap_rows = []
@@ -811,6 +1055,7 @@ def compute_stability_metrics(
         predicted_class = int(prediction_table.iloc[case_id]["predicted_label_id"])
         base_instance = flattened_test[case_id]
         top_sets = []
+        
         for repeat_index in range(STABILITY_REPEATS):
             noise = np.random.normal(0, STABILITY_NOISE_STD, size=base_instance.shape)
             perturbed = base_instance + noise
@@ -823,18 +1068,24 @@ def compute_stability_metrics(
                 STABILITY_TOP_K,
             )
             top_sets.append(top_set)
-
+        
         pair_scores = []
         for left in range(len(top_sets)):
             for right in range(left + 1, len(top_sets)):
                 union = top_sets[left].union(top_sets[right])
-                score = len(top_sets[left].intersection(top_sets[right])) / len(union) if union else 0.0
+                score = (
+                    len(top_sets[left].intersection(top_sets[right])) / len(union)
+                    if union
+                    else 0.0
+                )
                 pair_scores.append(score)
-
+        
         shap_rows.append(
             {
                 "sample_row_index": case_id,
-                "predicted_label_name": str(prediction_table.iloc[case_id]["predicted_label_name"]),
+                "predicted_label_name": str(
+                    prediction_table.iloc[case_id]["predicted_label_name"]
+                ),
                 "stability_score": float(np.mean(pair_scores)) if pair_scores else None,
             }
         )
@@ -844,6 +1095,7 @@ def compute_stability_metrics(
         prediction_table["predicted_label_name"].isin(["suspicious", "attack"])
     ].tolist()
     lime_training_data = flattened_test
+    
     lime_explainer = lime.lime_tabular.LimeTabularExplainer(
         training_data=lime_training_data,
         feature_names=flat_feature_names,
@@ -852,11 +1104,12 @@ def compute_stability_metrics(
         discretize_continuous=True,
         random_state=RANDOM_STATE,
     )
-
+    
     for case_id in lime_case_ids:
         predicted_class = int(prediction_table.iloc[case_id]["predicted_label_id"])
         base_instance = flattened_test[case_id]
         top_sets = []
+        
         for repeat_index in range(STABILITY_REPEATS):
             noise = np.random.normal(0, STABILITY_NOISE_STD, size=base_instance.shape)
             perturbed = base_instance + noise
@@ -873,31 +1126,47 @@ def compute_stability_metrics(
         for left in range(len(top_sets)):
             for right in range(left + 1, len(top_sets)):
                 union = top_sets[left].union(top_sets[right])
-                score = len(top_sets[left].intersection(top_sets[right])) / len(union) if union else 0.0
+                score = (
+                    len(top_sets[left].intersection(top_sets[right])) / len(union)
+                    if union
+                    else 0.0
+                )
                 pair_scores.append(score)
 
         lime_rows.append(
             {
                 "sample_row_index": case_id,
-                "predicted_label_name": str(prediction_table.iloc[case_id]["predicted_label_name"]),
+                "predicted_label_name": str(
+                    prediction_table.iloc[case_id]["predicted_label_name"]
+                ),
                 "stability_score": float(np.mean(pair_scores)) if pair_scores else None,
             }
         )
-
+    
     shap_stability_table = pd.DataFrame(shap_rows)
     lime_stability_table = pd.DataFrame(lime_rows)
 
-    shap_stability_table.to_csv(XAI_METRICS_OUTPUT_DIR / "shap_stability_scores.csv", index=False)
-    lime_stability_table.to_csv(XAI_METRICS_OUTPUT_DIR / "lime_stability_scores.csv", index=False)
+    shap_stability_table.to_csv(
+        XAI_METRICS_OUTPUT_DIR / "shap_stability_scores.csv", index=False
+    )
+    lime_stability_table.to_csv(
+        XAI_METRICS_OUTPUT_DIR / "lime_stability_scores.csv", index=False
+    )
 
     return {
         "shap_stability_table": shap_stability_table,
         "lime_stability_table": lime_stability_table,
-        "mean_shap_stability": float(shap_stability_table["stability_score"].mean()) if not shap_stability_table.empty else None,
-        "mean_lime_stability": float(lime_stability_table["stability_score"].mean()) if not lime_stability_table.empty else None,
+        "mean_shap_stability": float(shap_stability_table["stability_score"].mean())
+        if not shap_stability_table.empty
+        else None,
+        "mean_lime_stability": float(lime_stability_table["stability_score"].mean())
+        if not lime_stability_table.empty
+        else None,
     }
 
 
+# Save a compact summary of the explanation-overlap, fidelity, and stability
+# metrics and create one high-level quality plot.
 def save_xai_metrics_summary(
     comparison_results: dict,
     fidelity_results: dict,
@@ -906,9 +1175,15 @@ def save_xai_metrics_summary(
     lime_results: dict,
 ) -> None:
     summary = {
-        "explained_shap_cases": int(len(shap_results["explained_samples_table"])) if not shap_results["explained_samples_table"].empty else 0,
+        "explained_shap_cases": int(len(shap_results["explained_samples_table"]))
+        if not shap_results["explained_samples_table"].empty
+        else 0,
         "explained_lime_cases": int(len(lime_results["selected_indices"])),
-        "common_case_count_for_jaccard": int(len(comparison_results["case_level_table"])) if not comparison_results["case_level_table"].empty else 0,
+        "common_case_count_for_jaccard": int(
+            len(comparison_results["case_level_table"])
+        )
+        if not comparison_results["case_level_table"].empty
+        else 0,
         "mean_jaccard_similarity": comparison_results["mean_jaccard_similarity"],
         "mean_shap_fidelity": fidelity_results["mean_shap_fidelity"],
         "mean_lime_fidelity": fidelity_results["mean_lime_fidelity"],
@@ -920,7 +1195,9 @@ def save_xai_metrics_summary(
         "stability_noise_std": STABILITY_NOISE_STD,
     }
     save_json(summary, XAI_METRICS_OUTPUT_DIR / "xai_metrics_summary.json")
-    pd.DataFrame([summary]).to_csv(XAI_METRICS_OUTPUT_DIR / "xai_metrics_summary.csv", index=False)
+    pd.DataFrame([summary]).to_csv(
+        XAI_METRICS_OUTPUT_DIR / "xai_metrics_summary.csv", index=False
+    )
 
     metric_names = []
     metric_values = []
@@ -944,7 +1221,7 @@ def save_xai_metrics_summary(
         plt.savefig(XAI_PLOT_DIR / "xai_quality_summary.png", dpi=150)
         plt.close()
 
-
+#  # Define the main execution flow.
 def main() -> None:
     create_folders()
 
@@ -956,14 +1233,20 @@ def main() -> None:
     predicted_probabilities = predict_test_probabilities(model, X_test)
     predicted_labels = convert_probabilities_to_labels(predicted_probabilities)
 
-    metrics_3class, report_3class_text, confusion_3class = evaluate_three_class_performance(y_test, predicted_labels)
-    metrics_binary, report_binary_text, confusion_binary = evaluate_binary_performance(y_test, predicted_labels)
+    metrics_3class, report_3class_text, confusion_3class = (
+        evaluate_three_class_performance(y_test, predicted_labels)
+    )
+    metrics_binary, report_binary_text, confusion_binary = evaluate_binary_performance(
+        y_test, predicted_labels
+    )
 
     prediction_table = test_sequence_metadata.copy()
     prediction_table["true_label_id"] = y_test
     prediction_table["true_label_name"] = [CLASS_ID_TO_NAME[int(x)] for x in y_test]
     prediction_table["predicted_label_id"] = predicted_labels
-    prediction_table["predicted_label_name"] = [CLASS_ID_TO_NAME[int(x)] for x in predicted_labels]
+    prediction_table["predicted_label_name"] = [
+        CLASS_ID_TO_NAME[int(x)] for x in predicted_labels
+    ]
     prediction_table["probability_normal"] = predicted_probabilities[:, 0]
     prediction_table["probability_suspicious"] = predicted_probabilities[:, 1]
     prediction_table["probability_attack"] = predicted_probabilities[:, 2]
@@ -1040,5 +1323,6 @@ def main() -> None:
     print("[INFO] Model evaluation and XAI generation completed successfully.")
 
 
+# Run the evaluation and XAI pipeline only when this script is executed directly.
 if __name__ == "__main__":
     main()
