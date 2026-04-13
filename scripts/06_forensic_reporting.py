@@ -8,8 +8,10 @@ import pandas as pd
 from pandas.errors import EmptyDataError
 
 
+# Base directory for the project.
 BASE_DIR = Path(__file__).resolve().parents[1]
 
+# Data directories.
 SEQUENCE_DATA_DIR = BASE_DIR / "data" / "sequences"
 TRAINED_MODEL_DIR = BASE_DIR / "models" / "trained_models"
 TRAINING_HISTORY_DIR = BASE_DIR / "models" / "training_history"
@@ -25,6 +27,7 @@ FORENSIC_CASE_DIR = FORENSIC_REPORT_DIR / "cases"
 FORENSIC_AUDIT_DIR = BASE_DIR / "outputs" / "forensic_audit"
 FORENSIC_PLOT_DIR = BASE_DIR / "outputs" / "plots" / "forensic"
 
+# Map class identifiers to readable names for report writing and analyst-facing outputs.
 CLASS_ID_TO_NAME = {
     0: "normal",
     1: "suspicious",
@@ -32,12 +35,14 @@ CLASS_ID_TO_NAME = {
 }
 
 
+# Print a formatted step header for better readability in logs.
 def print_step(title: str) -> None:
     print("\n" + "=" * 60)
     print(title)
     print("=" * 60)
 
 
+# Ensure that all forensic-reporting output directories exist.
 def create_folders() -> None:
     for folder in [
         FORENSIC_REPORT_DIR,
@@ -48,40 +53,56 @@ def create_folders() -> None:
         folder.mkdir(parents=True, exist_ok=True)
 
 
+# Save structured forensic or audit information in JSON format
 def save_json(payload: dict, path: Path) -> None:
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2)
 
 
+# Compute the SHA-256 hash of a file so model and evidence artefacts can be
+# tracked for integrity and reproducibility purposes.
 def file_sha256(path: Path) -> str | None:
     if not path.exists():
         return None
+    
     hasher = hashlib.sha256()
     with open(path, "rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             hasher.update(chunk)
+    
     return hasher.hexdigest()
 
 
-def safe_read_csv(path: Path, fallback_columns: list[str] | None = None) -> pd.DataFrame:
+# Safely load a CSV file while returning an empty table with fallback columns
+# if the file is missing or empty.
+def safe_read_csv(
+    path: Path, fallback_columns: list[str] | None = None
+) -> pd.DataFrame:
     if not path.exists():
         return pd.DataFrame(columns=fallback_columns or [])
+    
     try:
         return pd.read_csv(path)
     except EmptyDataError:
         return pd.DataFrame(columns=fallback_columns or [])
 
 
+# Load a JSON file only if it exists, otherwise return an empty dictionary.
 def load_optional_json(path: Path) -> dict:
     if not path.exists():
         return {}
+    
     with open(path, "r", encoding="utf-8") as handle:
         return json.load(handle)
 
 
+# Load the prediction outputs, XAI explanations, comparison tables, and
+# explanation-quality metrics required to construct forensic case reports.
 def load_reporting_inputs():
     prediction_table = pd.read_csv(EVALUATION_OUTPUT_DIR / "test_predictions.csv")
-    sequence_metadata_table = pd.read_csv(SEQUENCE_DATA_DIR / "test_sequence_metadata.csv")
+    sequence_metadata_table = pd.read_csv(
+        SEQUENCE_DATA_DIR / "test_sequence_metadata.csv"
+    )
 
     shap_global_table = safe_read_csv(
         SHAP_OUTPUT_DIR / "shap_global_feature_importance.csv",
@@ -112,7 +133,7 @@ def load_reporting_inputs():
             "absolute_lime_weight",
         ],
     )
-
+    
     xai_case_comparison_table = safe_read_csv(
         XAI_COMPARISON_OUTPUT_DIR / "xai_case_level_comparison.csv",
         [
@@ -128,11 +149,23 @@ def load_reporting_inputs():
 
     shap_fidelity_table = safe_read_csv(
         XAI_METRICS_DIR / "shap_fidelity_scores.csv",
-        ["sample_row_index", "predicted_label_name", "predicted_class_probability", "masked_probability", "fidelity_score"],
+        [
+            "sample_row_index",
+            "predicted_label_name",
+            "predicted_class_probability",
+            "masked_probability",
+            "fidelity_score",
+        ],
     )
     lime_fidelity_table = safe_read_csv(
         XAI_METRICS_DIR / "lime_fidelity_scores.csv",
-        ["sample_row_index", "predicted_label_name", "predicted_class_probability", "masked_probability", "fidelity_score"],
+        [
+            "sample_row_index",
+            "predicted_label_name",
+            "predicted_class_probability",
+            "masked_probability",
+            "fidelity_score",
+        ],
     )
     shap_stability_table = safe_read_csv(
         XAI_METRICS_DIR / "shap_stability_scores.csv",
@@ -142,7 +175,9 @@ def load_reporting_inputs():
         XAI_METRICS_DIR / "lime_stability_scores.csv",
         ["sample_row_index", "predicted_label_name", "stability_score"],
     )
-    xai_metrics_summary = load_optional_json(XAI_METRICS_DIR / "xai_metrics_summary.json")
+    xai_metrics_summary = load_optional_json(
+        XAI_METRICS_DIR / "xai_metrics_summary.json"
+    )
 
     return (
         prediction_table,
@@ -159,28 +194,45 @@ def load_reporting_inputs():
     )
 
 
+# Normalize LIME condition text by extracting the actual flattened feature name
 def _normalize_lime_feature_name(condition_or_feature: str) -> str:
     cleaned = str(condition_or_feature)
     for operator in ["<=", ">=", "<", ">", "="]:
         if operator in cleaned:
             left_part = cleaned.split(operator)[0].strip()
             right_part = cleaned.split(operator)[-1].strip()
+            
             if left_part.startswith("t") and "_" in left_part:
                 return left_part
             if right_part.startswith("t") and "_" in right_part:
                 return right_part
+            
     return cleaned.strip()
 
 
+# Select only the suspicious and attack predictions for forensic follow-up,
+# since normal cases are not escalated into analyst-facing case reports.
 def select_forensic_cases(prediction_table: pd.DataFrame) -> pd.DataFrame:
-    return prediction_table[
-        prediction_table["predicted_label_name"].isin(["suspicious", "attack"])
-    ].copy().reset_index(drop=True)
+    return (
+        prediction_table[
+            prediction_table["predicted_label_name"].isin(["suspicious", "attack"])
+        ]
+        .copy()
+        .reset_index(drop=True)
+    )
 
 
-def write_plain_language_explanation(predicted_label_name: str, shap_features: list[str], lime_features: list[str]) -> str:
-    key_shap = ", ".join(shap_features[:3]) if shap_features else "no strong SHAP indicators"
-    key_lime = ", ".join(lime_features[:3]) if lime_features else "no strong LIME indicators"
+# Write a short analyst-friendly explanation that summarizes what SHAP and LIME
+# highlighted for the case in plain language.
+def write_plain_language_explanation(
+    predicted_label_name: str, shap_features: list[str], lime_features: list[str]
+) -> str:
+    key_shap = (
+        ", ".join(shap_features[:3]) if shap_features else "no strong SHAP indicators"
+    )
+    key_lime = (
+        ", ".join(lime_features[:3]) if lime_features else "no strong LIME indicators"
+    )
     return (
         f"The model marked this case as {predicted_label_name}. "
         f"SHAP highlighted {key_shap}. "
@@ -189,24 +241,37 @@ def write_plain_language_explanation(predicted_label_name: str, shap_features: l
     )
 
 
+# Generate a simple analyst action recommendation based on the predicted class severity.
 def write_analyst_recommendation(predicted_label_name: str) -> str:
     if predicted_label_name == "attack":
         return "Escalate immediately for analyst review and confirm with packet- or log-level evidence."
     return "Mark for analyst triage and verify whether the behaviour matches known suspicious activity."
 
 
-def lookup_metric(table: pd.DataFrame, sample_row_index: int, value_column: str) -> float | None:
-    if table.empty or "sample_row_index" not in table.columns or value_column not in table.columns:
+# Look up one explanation-quality metric for a given sequence case while handling
+# missing tables or missing values safely.
+def lookup_metric(
+    table: pd.DataFrame, sample_row_index: int, value_column: str
+) -> float | None:
+    if (
+        table.empty
+        or "sample_row_index" not in table.columns
+        or value_column not in table.columns
+    ):
         return None
+    
     matched = table[table["sample_row_index"] == sample_row_index]
     if matched.empty:
         return None
+    
     try:
         return float(matched.iloc[0][value_column])
     except Exception:
         return None
 
 
+# Build a compact textual summary of overlap, fidelity, and stability values so
+# each forensic case record includes a readable explanation-quality snapshot.
 def build_explanation_quality_summary(
     jaccard_similarity: float | None,
     shap_fidelity: float | None,
@@ -244,6 +309,8 @@ def build_explanation_quality_summary(
     return "; ".join(parts)
 
 
+# Build one structured forensic case record by combining prediction details,
+# SHAP and LIME indicators, explanation-quality metrics, and analyst guidance.
 def build_forensic_case_record(
     case_number: int,
     case_row: pd.Series,
@@ -265,21 +332,43 @@ def build_forensic_case_record(
         lime_summary_table["sample_row_index"] == sample_row_index
     ].copy()
 
-    shap_top_features = shap_case["flat_feature"].head(10).astype(str).tolist() if not shap_case.empty else []
+    shap_top_features = (
+        shap_case["flat_feature"].head(10).astype(str).tolist()
+        if not shap_case.empty
+        else []
+    )
 
     if not lime_case.empty:
-        lime_case["normalized_feature"] = lime_case["condition_or_feature"].apply(_normalize_lime_feature_name)
-        lime_top_features = lime_case["normalized_feature"].head(10).astype(str).tolist()
+        # Normalize LIME feature references before comparing them with SHAP outputs.
+        lime_case["normalized_feature"] = lime_case["condition_or_feature"].apply(
+            _normalize_lime_feature_name
+        )
+        lime_top_features = (
+            lime_case["normalized_feature"].head(10).astype(str).tolist()
+        )
     else:
         lime_top_features = []
+    
+    # Record the direct overlap between top SHAP and LIME indicators.
+    shared_features = sorted(
+        set(shap_top_features).intersection(set(lime_top_features))
+    )
 
-    shared_features = sorted(set(shap_top_features).intersection(set(lime_top_features)))
-
-    jaccard_similarity = lookup_metric(xai_case_comparison_table, sample_row_index, "jaccard_similarity")
-    shap_fidelity = lookup_metric(shap_fidelity_table, sample_row_index, "fidelity_score")
-    lime_fidelity = lookup_metric(lime_fidelity_table, sample_row_index, "fidelity_score")
-    shap_stability = lookup_metric(shap_stability_table, sample_row_index, "stability_score")
-    lime_stability = lookup_metric(lime_stability_table, sample_row_index, "stability_score")
+    jaccard_similarity = lookup_metric(
+        xai_case_comparison_table, sample_row_index, "jaccard_similarity"
+    )
+    shap_fidelity = lookup_metric(
+        shap_fidelity_table, sample_row_index, "fidelity_score"
+    )
+    lime_fidelity = lookup_metric(
+        lime_fidelity_table, sample_row_index, "fidelity_score"
+    )
+    shap_stability = lookup_metric(
+        shap_stability_table, sample_row_index, "stability_score"
+    )
+    lime_stability = lookup_metric(
+        lime_stability_table, sample_row_index, "stability_score"
+    )
 
     forensic_record = {
         "case_id": f"case_{case_number:06d}",
@@ -312,11 +401,15 @@ def build_forensic_case_record(
             shap_top_features,
             lime_top_features,
         ),
-        "analyst_recommendation": write_analyst_recommendation(str(case_row["predicted_label_name"])),
+        "analyst_recommendation": write_analyst_recommendation(
+            str(case_row["predicted_label_name"])
+        ),
     }
     return forensic_record
 
 
+# Generate all forensic case records for suspicious and attack predictions and
+# save each case as an individual JSON report.
 def generate_forensic_case_reports(
     forensic_cases_table: pd.DataFrame,
     shap_local_summary_table: pd.DataFrame,
@@ -329,7 +422,9 @@ def generate_forensic_case_reports(
 ):
     forensic_records = []
 
-    for case_number, (_, case_row) in enumerate(forensic_cases_table.iterrows(), start=1):
+    for case_number, (_, case_row) in enumerate(
+        forensic_cases_table.iterrows(), start=1
+    ):
         record = build_forensic_case_record(
             case_number,
             case_row,
@@ -347,13 +442,16 @@ def generate_forensic_case_reports(
     return forensic_records
 
 
+# Save the full forensic case summary table and also write one sample text report.
 def save_forensic_summary(forensic_records: list[dict]) -> pd.DataFrame:
     summary_table = pd.DataFrame(forensic_records)
     summary_table.to_csv(FORENSIC_REPORT_DIR / "forensic_case_summary.csv", index=False)
 
     if not summary_table.empty:
         sample_record = summary_table.iloc[0].to_dict()
-        with open(FORENSIC_REPORT_DIR / "sample_forensic_report.txt", "w", encoding="utf-8") as handle:
+        with open(
+            FORENSIC_REPORT_DIR / "sample_forensic_report.txt", "w", encoding="utf-8"
+        ) as handle:
             handle.write("Sample forensic report\n")
             handle.write("======================\n")
             for key, value in sample_record.items():
@@ -362,10 +460,12 @@ def save_forensic_summary(forensic_records: list[dict]) -> pd.DataFrame:
     return summary_table
 
 
+# Create compact visual summaries of the forensic case distribution, recurring
+# shared indicators, and mean explanation-quality metrics.
 def create_forensic_plots(summary_table: pd.DataFrame) -> None:
     if summary_table.empty:
         return
-
+    
     label_counts = summary_table["predicted_label_name"].value_counts()
 
     plt.figure(figsize=(7, 5))
@@ -398,7 +498,11 @@ def create_forensic_plots(summary_table: pd.DataFrame) -> None:
         ("shap_stability", "SHAP Stability"),
         ("lime_stability", "LIME Stability"),
     ]
-    available = [(col, name) for col, name in metric_columns if col in summary_table.columns and summary_table[col].notna().any()]
+    available = [
+        (col, name)
+        for col, name in metric_columns
+        if col in summary_table.columns and summary_table[col].notna().any()
+    ]
 
     if available:
         metric_names = []
@@ -416,6 +520,7 @@ def create_forensic_plots(summary_table: pd.DataFrame) -> None:
         plt.close()
 
 
+# Build a lightweight run manifest that records key files and their hashes
 def build_run_manifest() -> dict:
     model_path = TRAINED_MODEL_DIR / "cnn_gru_intrusion_model.keras"
     prediction_path = EVALUATION_OUTPUT_DIR / "test_predictions.csv"
@@ -431,10 +536,14 @@ def build_run_manifest() -> dict:
         "shap_global_file": str(shap_global_path),
         "shap_global_sha256": file_sha256(shap_global_path),
         "lime_summary_file": str(lime_summary_path),
-        "lime_summary_sha256": file_sha256(lime_summary_path) if lime_summary_path.exists() else None,
+        "lime_summary_sha256": file_sha256(lime_summary_path)
+        if lime_summary_path.exists()
+        else None,
     }
 
 
+# Build a compact evidence provenance table that links each forensic case back
+# to its originating prediction and row-level identifiers.
 def build_evidence_provenance_summary(
     prediction_table: pd.DataFrame,
     summary_table: pd.DataFrame,
@@ -453,7 +562,9 @@ def build_evidence_provenance_summary(
     prediction_copy = prediction_table.copy()
 
     if "sample_row_index" not in prediction_copy.columns:
-        prediction_copy = prediction_copy.reset_index().rename(columns={"index": "sample_row_index"})
+        prediction_copy = prediction_copy.reset_index().rename(
+            columns={"index": "sample_row_index"}
+        )
 
     if "sample_row_index" not in summary_table.columns:
         raise ValueError("summary_table is missing 'sample_row_index'.")
@@ -465,23 +576,29 @@ def build_evidence_provenance_summary(
         suffixes=("_summary", "_prediction"),
     )
 
-    output_table = pd.DataFrame({
-        "case_id": merged_table["case_id"],
-        "sample_row_index": merged_table["sample_row_index"],
-        "last_row_id": merged_table.get("last_row_id_summary", merged_table.get("last_row_id")),
-        "predicted_label_name": merged_table.get(
-            "predicted_label_name_summary",
-            merged_table.get("predicted_label_name"),
-        ),
-        "true_label_name": merged_table.get(
-            "true_label_name_summary",
-            merged_table.get("true_label_name"),
-        ),
-    })
+    output_table = pd.DataFrame(
+        {
+            "case_id": merged_table["case_id"],
+            "sample_row_index": merged_table["sample_row_index"],
+            "last_row_id": merged_table.get(
+                "last_row_id_summary", merged_table.get("last_row_id")
+            ),
+            "predicted_label_name": merged_table.get(
+                "predicted_label_name_summary",
+                merged_table.get("predicted_label_name"),
+            ),
+            "true_label_name": merged_table.get(
+                "true_label_name_summary",
+                merged_table.get("true_label_name"),
+            ),
+        }
+    )
 
     return output_table
 
 
+# Build a feature-integrity report that records the saved sequence feature
+# specification and training configuration together with their hashes.
 def build_feature_integrity_report() -> dict:
     feature_columns_path = SEQUENCE_DATA_DIR / "sequence_feature_columns.json"
     training_config_path = TRAINING_HISTORY_DIR / "training_config.json"
@@ -499,19 +616,33 @@ def build_feature_integrity_report() -> dict:
     }
 
 
+# Check whether the key artefacts required to reproduce the forensic workflow
+# are present in the expected locations.
 def build_reproducibility_checklist() -> dict:
     checks = {
         "model_exists": (TRAINED_MODEL_DIR / "cnn_gru_intrusion_model.keras").exists(),
-        "test_predictions_exist": (EVALUATION_OUTPUT_DIR / "test_predictions.csv").exists(),
-        "sequence_metadata_exists": (SEQUENCE_DATA_DIR / "test_sequence_metadata.csv").exists(),
-        "shap_output_exists": (SHAP_OUTPUT_DIR / "shap_global_feature_importance.csv").exists(),
-        "lime_output_exists": (LIME_OUTPUT_DIR / "lime_explanation_summary.csv").exists(),
-        "xai_metrics_summary_exists": (XAI_METRICS_DIR / "xai_metrics_summary.json").exists(),
+        "test_predictions_exist": (
+            EVALUATION_OUTPUT_DIR / "test_predictions.csv"
+        ).exists(),
+        "sequence_metadata_exists": (
+            SEQUENCE_DATA_DIR / "test_sequence_metadata.csv"
+        ).exists(),
+        "shap_output_exists": (
+            SHAP_OUTPUT_DIR / "shap_global_feature_importance.csv"
+        ).exists(),
+        "lime_output_exists": (
+            LIME_OUTPUT_DIR / "lime_explanation_summary.csv"
+        ).exists(),
+        "xai_metrics_summary_exists": (
+            XAI_METRICS_DIR / "xai_metrics_summary.json"
+        ).exists(),
     }
     checks["all_required_files_present"] = all(checks.values())
     return checks
 
 
+# Extract the core decision-trace columns so each forensic case can be reviewed
+# alongside its prediction probabilities and explanation-quality metrics.
 def build_decision_trace_summary(summary_table: pd.DataFrame) -> pd.DataFrame:
     columns_to_keep = [
         "case_id",
@@ -526,10 +657,14 @@ def build_decision_trace_summary(summary_table: pd.DataFrame) -> pd.DataFrame:
         "shap_stability",
         "lime_stability",
     ]
-    available_columns = [column for column in columns_to_keep if column in summary_table.columns]
+    available_columns = [
+        column for column in columns_to_keep if column in summary_table.columns
+    ]
     return summary_table[available_columns].copy()
 
 
+# Combine the global XAI metrics summary with case-level mean values so the
+# forensic audit bundle captures both overall and case-specific explanation quality.
 def build_forensic_xai_quality_summary(
     xai_metrics_summary: dict,
     summary_table: pd.DataFrame,
@@ -549,13 +684,16 @@ def build_forensic_xai_quality_summary(
 
     for column in metric_columns:
         if column in summary_table.columns and summary_table[column].notna().any():
-            result["forensic_case_metric_means"][column] = float(summary_table[column].dropna().mean())
+            result["forensic_case_metric_means"][column] = float(
+                summary_table[column].dropna().mean()
+            )
         else:
             result["forensic_case_metric_means"][column] = None
 
     return result
 
 
+# Define the main execution flow.
 def main() -> None:
     create_folders()
 
@@ -593,23 +731,39 @@ def main() -> None:
 
     print_step("[STEP 4] Build forensic audit summary")
     run_manifest = build_run_manifest()
-    evidence_provenance_table = build_evidence_provenance_summary(prediction_table, summary_table)
+    evidence_provenance_table = build_evidence_provenance_summary(
+        prediction_table, summary_table
+    )
     feature_integrity_report = build_feature_integrity_report()
     reproducibility_checklist = build_reproducibility_checklist()
     decision_trace_summary = build_decision_trace_summary(summary_table)
-    forensic_xai_quality_summary = build_forensic_xai_quality_summary(xai_metrics_summary, summary_table)
+    forensic_xai_quality_summary = build_forensic_xai_quality_summary(
+        xai_metrics_summary, summary_table
+    )
 
     save_json(run_manifest, FORENSIC_AUDIT_DIR / "audit_run_manifest.json")
-    evidence_provenance_table.to_csv(FORENSIC_AUDIT_DIR / "evidence_provenance_summary.csv", index=False)
-    save_json(feature_integrity_report, FORENSIC_AUDIT_DIR / "feature_integrity_report.json")
-    save_json(reproducibility_checklist, FORENSIC_AUDIT_DIR / "reproducibility_checklist.json")
-    decision_trace_summary.to_csv(FORENSIC_AUDIT_DIR / "decision_trace_summary.csv", index=False)
-    save_json(forensic_xai_quality_summary, FORENSIC_AUDIT_DIR / "forensic_xai_quality_summary.json")
+    evidence_provenance_table.to_csv(
+        FORENSIC_AUDIT_DIR / "evidence_provenance_summary.csv", index=False
+    )
+    save_json(
+        feature_integrity_report, FORENSIC_AUDIT_DIR / "feature_integrity_report.json"
+    )
+    save_json(
+        reproducibility_checklist, FORENSIC_AUDIT_DIR / "reproducibility_checklist.json"
+    )
+    decision_trace_summary.to_csv(
+        FORENSIC_AUDIT_DIR / "decision_trace_summary.csv", index=False
+    )
+    save_json(
+        forensic_xai_quality_summary,
+        FORENSIC_AUDIT_DIR / "forensic_xai_quality_summary.json",
+    )
 
     print_step("[DONE]")
     print("[INFO] Forensic reporting completed successfully.")
     print(f"[INFO] Forensic cases tracked: {len(summary_table)}")
 
 
+# Run the forensic-reporting pipeline only when this script is executed directly.
 if __name__ == "__main__":
     main()

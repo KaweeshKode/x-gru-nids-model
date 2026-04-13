@@ -15,6 +15,7 @@ from sklearn.metrics import (
     auc,
 )
 
+
 # Base directory for the project.
 BASE_DIR = Path(__file__).resolve().parents[1]
 
