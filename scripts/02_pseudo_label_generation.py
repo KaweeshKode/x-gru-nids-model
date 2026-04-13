@@ -10,8 +10,11 @@ from sklearn.decomposition import PCA
 from sklearn.metrics import classification_report, confusion_matrix, silhouette_score
 
 
+# Base directory for the project.
 BASE_DIR = Path(__file__).resolve().parents[1]
 
+# Data directories for processed features, pseudo labels
+# and output plots.
 PROCESSED_DATA_DIR = BASE_DIR / "data" / "processed"
 PSEUDO_LABEL_DATA_DIR = BASE_DIR / "data" / "pseudo_labels"
 
@@ -20,11 +23,15 @@ PSEUDO_LABEL_MODEL_DIR = BASE_DIR / "models" / "pseudo_labels"
 PSEUDO_LABEL_OUTPUT_DIR = BASE_DIR / "outputs" / "pseudo_labels"
 PSEUDO_LABEL_PLOT_DIR = BASE_DIR / "outputs" / "plots" / "pseudo_labels"
 
+# Configure the K-Means clustering stage used to generate
+# cluster-based traffic groupings.
 NUMBER_OF_CLUSTERS = 3
 RANDOM_STATE = 42
 NUMBER_OF_INITIALIZATIONS = 20
 SILHOUETTE_SAMPLE_SIZE = 20000
 
+# Define the weighted contribution of each normalized component to
+# the final hybrid risk score used for pseudo-label assignment.
 RISK_SCORE_WEIGHTS = {
     "distance_norm": 0.50,
     "ttl_gap_norm": 0.20,
@@ -33,10 +40,13 @@ RISK_SCORE_WEIGHTS = {
     "load_total_norm": 0.10,
 }
 
+# Configure the score-calibration stage used to derive lower and
+# upper pseudo-label thresholds from the training data distribution.
 LOW_ATTACK_RATE = 0.10
 HIGH_ATTACK_RATE = 0.60
 NUMBER_OF_CALIBRATION_BINS = 100
 
+# Map pseudo-label names to stable numeric identifiers for later use.
 PSEUDO_LABEL_TO_ID = {
     "normal": 0,
     "suspicious": 1,
@@ -44,12 +54,14 @@ PSEUDO_LABEL_TO_ID = {
 }
 
 
+# Print a formatted step header for better readability in logs.
 def print_step(title: str) -> None:
     print("\n" + "=" * 60)
     print(title)
     print("=" * 60)
 
 
+# Create necessary directories for storing pseudo-label data and models.
 def create_folders() -> None:
     for folder in [
         PSEUDO_LABEL_DATA_DIR,
@@ -60,11 +72,13 @@ def create_folders() -> None:
         folder.mkdir(parents=True, exist_ok=True)
 
 
+# Save structured pseudo-label configuration or summary data in JSON format.
 def save_json(payload: dict, path: Path) -> None:
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2)
 
 
+# Load the processed feature tables and metadata tables.
 def load_processed_datasets():
     train_features = pd.read_csv(PROCESSED_DATA_DIR / "train_processed.csv")
     validation_features = pd.read_csv(PROCESSED_DATA_DIR / "validation_processed.csv")
@@ -84,6 +98,7 @@ def load_processed_datasets():
     )
 
 
+# Train a K-Means clustering model on the training feature set.
 def train_kmeans_model(train_features: pd.DataFrame) -> KMeans:
     model = KMeans(
         n_clusters=NUMBER_OF_CLUSTERS,
@@ -91,21 +106,34 @@ def train_kmeans_model(train_features: pd.DataFrame) -> KMeans:
         n_init=NUMBER_OF_INITIALIZATIONS,
         random_state=RANDOM_STATE,
     )
+    
     model.fit(train_features)
     return model
 
 
+# Calculate cluster assignments and distances to centroids for a given 
+# feature set using the trained K-Means model.
 def calculate_cluster_features(model: KMeans, features: pd.DataFrame):
+    # Compute the distance from each record to every cluster centroid.
     all_distances = model.transform(features)
+    
+    # Assign each record to its nearest centroid.
     assigned_clusters = np.argmin(all_distances, axis=1)
+    
+    # Extract the distance to the assigned centroid only.
     centroid_distances = all_distances[np.arange(len(features)), assigned_clusters]
+    
     return assigned_clusters, centroid_distances, all_distances
 
 
+# Clean a numeric series before score normalization by removing infinite
+# values and replacing missing entries with zero.
 def clamp_series(series: pd.Series) -> pd.Series:
     return series.replace([np.inf, -np.inf], np.nan).fillna(0)
 
 
+# Normalize a score component to the [0, 1] range using the training split as
+# the reference distribution so all risk components can be combined fairly.
 def normalize_score_component(
     train_series: pd.Series,
     other_series: pd.Series | None = None,
@@ -126,16 +154,23 @@ def normalize_score_component(
     return train_normalized, other_normalized, {"min": minimum, "max": maximum}
 
 
+# Safely extract a feature column for risk scoring, or create a fallback series
+# when the expected column is unavailable.
 def build_proxy_feature(
     feature_table: pd.DataFrame,
     column_name: str,
     fallback_value: float = 0.0,
 ) -> pd.Series:
     if column_name not in feature_table.columns:
-        return pd.Series(np.full(len(feature_table), fallback_value), index=feature_table.index)
+        return pd.Series(
+            np.full(len(feature_table), fallback_value), index=feature_table.index
+        )
     return clamp_series(feature_table[column_name]).abs()
 
 
+# Build the normalized risk-score components for all dataset splits so the
+# hybrid scoring stage can combine centroid distance with supporting traffic
+# behaviour signals.
 def build_risk_score_components(
     train_features: pd.DataFrame,
     validation_features: pd.DataFrame,
@@ -186,17 +221,23 @@ def build_risk_score_components(
 
         _, test_components[component_name], _ = normalize_score_component(train_series, test_series)
         component_ranges[component_name] = component_range
-
+    
     return train_components, validation_components, test_components, component_ranges
 
 
+# Combine the normalized risk components into a single hybrid risk score using
+# the predefined component weights.
 def calculate_hybrid_risk_score(score_components: dict[str, pd.Series]) -> np.ndarray:
     score = np.zeros(len(next(iter(score_components.values()))), dtype=float)
+    
     for component_name, component_weight in RISK_SCORE_WEIGHTS.items():
         score += component_weight * score_components[component_name].values
+    
     return score
 
 
+# Derive lower and upper pseudo-label thresholds from the training risk scores
+# by examining how the true binary attack rate changes across the score range.
 def calibrate_label_thresholds(
     train_scores: np.ndarray,
     true_binary_labels: pd.Series,
@@ -236,7 +277,7 @@ def calibrate_label_thresholds(
         .reset_index()
     )
 
-    bin_statistics = bin_statistics[bin_statistics["count"] > 0].copy().reset_index(drop=True)
+    bin_statistics = (bin_statistics[bin_statistics["count"] > 0].copy().reset_index(drop=True))
 
     normal_bins = bin_statistics[bin_statistics["attack_rate"] <= LOW_ATTACK_RATE]
     attack_bins = bin_statistics[bin_statistics["attack_rate"] >= HIGH_ATTACK_RATE]
@@ -251,7 +292,7 @@ def calibrate_label_thresholds(
         if not attack_bins.empty
         else float(np.quantile(train_scores, 0.95))
     )
-
+    
     if not (lower_threshold < upper_threshold):
         lower_threshold = float(np.quantile(train_scores, 0.80))
         upper_threshold = float(np.quantile(train_scores, 0.95))
@@ -259,12 +300,15 @@ def calibrate_label_thresholds(
     return lower_threshold, upper_threshold, bin_statistics
 
 
+# Convert the continuous hybrid risk scores into three pseudo-label classes
+# using the calibrated lower and upper decision thresholds.
 def assign_pseudo_labels(
     scores: np.ndarray,
     lower_threshold: float,
     upper_threshold: float,
 ):
     label_names = np.empty(len(scores), dtype=object)
+    
     label_names[scores < lower_threshold] = "normal"
     label_names[(scores >= lower_threshold) & (scores < upper_threshold)] = "suspicious"
     label_names[scores >= upper_threshold] = "attack"
@@ -276,6 +320,8 @@ def assign_pseudo_labels(
     return label_names, label_ids
 
 
+# Perform a simple binary sanity check by comparing normal traffic against all
+# attack-like pseudo labels combined.
 def evaluate_pseudo_labels(
     split_name: str,
     true_binary_labels: pd.Series,
@@ -298,6 +344,8 @@ def evaluate_pseudo_labels(
     print(report)
 
 
+# Combine metadata, cluster outputs, risk scores, and pseudo labels into one
+# structured table for downstream sequence building and analysis.
 def build_pseudo_label_output(
     metadata_table: pd.DataFrame,
     assigned_clusters: np.ndarray,
@@ -307,6 +355,7 @@ def build_pseudo_label_output(
     pseudo_label_ids: np.ndarray,
 ) -> pd.DataFrame:
     labeled_table = metadata_table.copy()
+    
     labeled_table["cluster_id"] = assigned_clusters
     labeled_table["distance_to_centroid"] = centroid_distances
     labeled_table["hybrid_risk_score"] = hybrid_risk_scores
@@ -315,6 +364,8 @@ def build_pseudo_label_output(
     return labeled_table
 
 
+# Save the pseudo-labeled datasets, trained clustering model, calibration
+# settings, and component ranges so later stages can reuse this labeling setup.
 def save_pseudo_label_outputs(
     train_labels: pd.DataFrame,
     validation_labels: pd.DataFrame,
@@ -329,6 +380,7 @@ def save_pseudo_label_outputs(
     test_labels.to_csv(PSEUDO_LABEL_DATA_DIR / "test_pseudo_labeled.csv", index=False)
 
     with open(PSEUDO_LABEL_MODEL_DIR / "kmeans_model.pkl", "wb") as handle:
+        # Persist the trained clustering model for reproducibility.
         pickle.dump(model, handle)
 
     save_json(
@@ -342,12 +394,15 @@ def save_pseudo_label_outputs(
     )
 
     if not calibration_bin_statistics.empty:
+        # Save the train-based score bin statistics used in threshold calibration.
         calibration_bin_statistics.to_csv(
             PSEUDO_LABEL_OUTPUT_DIR / "train_calibration_bins.csv",
             index=False,
         )
 
 
+# Create visual summaries of pseudo-label counts, risk score distributions,
+# and the training cluster layout in reduced PCA space.
 def create_pseudo_label_plots(
     train_labels: pd.DataFrame,
     validation_labels: pd.DataFrame,
@@ -377,6 +432,7 @@ def create_pseudo_label_plots(
         plt.close()
 
     if len(train_features.columns) >= 2:
+        # Reduce the training feature space to two dimensions for cluster visualization.
         pca = PCA(n_components=2, random_state=RANDOM_STATE)
         reduced_values = pca.fit_transform(train_features)
 
@@ -388,6 +444,8 @@ def create_pseudo_label_plots(
         plt.close()
 
 
+# Print a compact summary of cluster membership and pseudo-label counts for
+# quick inspection during execution.
 def print_pseudo_label_summary(
     split_name: str,
     assigned_clusters: np.ndarray,
@@ -397,6 +455,7 @@ def print_pseudo_label_summary(
     print(f"[INFO] {split_name} pseudo-label counts: {pd.Series(labels).value_counts().to_dict()}")
 
 
+# Define the main execution flow.
 def main() -> None:
     create_folders()
 
@@ -419,6 +478,7 @@ def main() -> None:
     test_clusters, test_distances, _ = calculate_cluster_features(kmeans_model, test_features)
 
     if len(np.unique(train_clusters)) > 1:
+        # Measure cluster separation on the training split when multiple clusters exist.
         sample_size = min(SILHOUETTE_SAMPLE_SIZE, len(train_features))
         train_silhouette = silhouette_score(
             train_features,
@@ -448,9 +508,11 @@ def main() -> None:
     test_scores = calculate_hybrid_risk_score(test_components)
 
     print_step("[STEP 5] Calibrate thresholds on train split")
-    lower_threshold, upper_threshold, calibration_bin_statistics = calibrate_label_thresholds(
-        train_scores,
-        train_metadata["label"],
+    lower_threshold, upper_threshold, calibration_bin_statistics = (
+        calibrate_label_thresholds(
+            train_scores,
+            train_metadata["label"],
+        )
     )
 
     print_step("[STEP 6] Generate pseudo labels")
@@ -525,5 +587,6 @@ def main() -> None:
     print("[INFO] Pseudo label generation completed successfully.")
 
 
+# Run the main function when this script is executed directly.
 if __name__ == "__main__":
     main()
