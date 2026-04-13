@@ -6,18 +6,23 @@ import numpy as np
 import pandas as pd
 
 
+# Base directory for the project.
 BASE_DIR = Path(__file__).resolve().parents[1]
 
+# Data directories.
 PROCESSED_DATA_DIR = BASE_DIR / "data" / "processed"
 PSEUDO_LABEL_DATA_DIR = BASE_DIR / "data" / "pseudo_labels"
 SEQUENCE_DATA_DIR = BASE_DIR / "data" / "sequences"
 
 SEQUENCE_PLOT_DIR = BASE_DIR / "outputs" / "plots" / "sequences"
 
+# Configure how tabular traffic rows are converted into 
+# fixed-length temporal windows.
 SEQUENCE_LENGTH = 10
 SEQUENCE_STRIDE = 1
 REQUIRE_FULLY_STABLE_WINDOW_LABEL = False
 
+# Map sequence label identifiers to readable class names.
 LABEL_ID_TO_NAME = {
     0: "normal",
     1: "suspicious",
@@ -25,38 +30,45 @@ LABEL_ID_TO_NAME = {
 }
 
 
+# Print a formatted step header for better readability in logs.
 def print_step(title: str) -> None:
     print("\n" + "=" * 60)
     print(title)
     print("=" * 60)
 
 
+# Create necessary folders for storing sequence datasets and plots.
 def create_folders() -> None:
     for folder in [SEQUENCE_DATA_DIR, SEQUENCE_PLOT_DIR]:
         folder.mkdir(parents=True, exist_ok=True)
 
 
+# Save structured sequence configuration data in JSON format.
 def save_json(payload: dict, path: Path) -> None:
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2)
 
 
+# Load processed features, metadata, and pseudo labels for a given data split.
 def load_split_data(split_name: str):
     feature_table = pd.read_csv(PROCESSED_DATA_DIR / f"{split_name}_processed.csv")
     metadata_table = pd.read_csv(PROCESSED_DATA_DIR / f"{split_name}_metadata.csv")
     pseudo_label_table = pd.read_csv(PSEUDO_LABEL_DATA_DIR / f"{split_name}_pseudo_labeled.csv")
+    
     return feature_table, metadata_table, pseudo_label_table
 
 
+# Merge processed feature rows with pseudo-label information so sequence windows
+# can be built from one aligned, chronologically ordered table.
 def merge_processed_features_with_labels(
     feature_table: pd.DataFrame,
     metadata_table: pd.DataFrame,
     pseudo_label_table: pd.DataFrame,
     split_name: str,
 ) -> pd.DataFrame:
-    if "row_id" not in metadata_table.columns or "row_id" not in pseudo_label_table.columns:
+    if ("row_id" not in metadata_table.columns or "row_id" not in pseudo_label_table.columns):
         raise ValueError(f"{split_name}: row_id missing in metadata or pseudo-label table.")
-
+    
     merged_table = feature_table.copy()
     merged_table["row_id"] = metadata_table["row_id"].values
 
@@ -78,6 +90,7 @@ def merge_processed_features_with_labels(
     )
 
     if "ltime" in merged_table.columns and "stime" in merged_table.columns:
+        # Reapply chronological ordering after the merge.
         merged_table = merged_table.sort_values(
             ["ltime", "stime", "row_id"],
             kind="mergesort",
@@ -86,6 +99,8 @@ def merge_processed_features_with_labels(
     return merged_table
 
 
+# Select only the feature columns that should be fed into the sequence model,
+# excluding identifiers, labels, and preserved metadata fields.
 def get_model_feature_columns(merged_table: pd.DataFrame) -> list[str]:
     excluded_columns = {
         "row_id",
@@ -99,6 +114,8 @@ def get_model_feature_columns(merged_table: pd.DataFrame) -> list[str]:
     return [column for column in merged_table.columns if column not in excluded_columns]
 
 
+# Convert a chronologically ordered table of traffic rows into fixed-length sequences
+# with corresponding labels, based on the pseudo-label stability within each window.
 def create_sequences(
     merged_table: pd.DataFrame,
     feature_columns: list[str],
@@ -107,36 +124,51 @@ def create_sequences(
     stride: int = SEQUENCE_STRIDE,
     require_stable_window_label: bool = REQUIRE_FULLY_STABLE_WINDOW_LABEL,
 ):
+    # Extract the model input features and sequence labels as NumPy arrays for efficient slicing.
     feature_values = merged_table[feature_columns].values.astype(np.float32)
     label_values = merged_table["pseudo_label_id"].values.astype(np.int64)
-
+    
+    # Preserve row-level identifiers and timing fields for later sequence metadata tracking.
     row_ids = merged_table["row_id"].values
-    ltimes = merged_table["ltime"].values if "ltime" in merged_table.columns else np.zeros(len(merged_table))
-    stimes = merged_table["stime"].values if "stime" in merged_table.columns else np.zeros(len(merged_table))
+    ltimes = (
+        merged_table["ltime"].values
+        if "ltime" in merged_table.columns
+        else np.zeros(len(merged_table))
+    )
+    stimes = (
+        merged_table["stime"].values
+        if "stime" in merged_table.columns
+        else np.zeros(len(merged_table))
+    )
     true_binary_values = (
         merged_table["label"].values.astype(np.int64)
         if "label" in merged_table.columns
         else np.full(len(merged_table), -1)
     )
-
+    
     sequence_features = []
     sequence_labels = []
     sequence_metadata_rows = []
-
+    
+    # Slide a fixed-length window across the ordered records to build overlapping sequences.
     for start_index in range(0, len(merged_table) - sequence_length + 1, stride):
         end_index = start_index + sequence_length
-
+        
+        # Extract one candidate feature window and its row-level pseudo labels.
         window_features = feature_values[start_index:end_index]
         window_labels = label_values[start_index:end_index]
-
+        
+        # Optionally keep only windows whose labels are stable across the full sequence.
         if require_stable_window_label and len(np.unique(window_labels)) != 1:
             continue
-
+        
+        # Use the final time step label as the sequence target.
         final_label = int(window_labels[-1])
-
+        
         sequence_features.append(window_features)
         sequence_labels.append(final_label)
-
+        
+        # Preserve metadata from the final row so predictions can be traced back later.
         sequence_metadata_rows.append(
             {
                 "last_row_id": int(row_ids[end_index - 1]),
@@ -155,6 +187,7 @@ def create_sequences(
     )
 
 
+# Save the generated sequence tensors and label arrays.
 def save_sequence_datasets(
     X_train: np.ndarray,
     y_train: np.ndarray,
@@ -173,6 +206,7 @@ def save_sequence_datasets(
     np.save(SEQUENCE_DATA_DIR / "y_test_labels.npy", y_test)
 
 
+# Save sequence-level metadata.
 def save_sequence_metadata(
     train_sequence_metadata: pd.DataFrame,
     validation_sequence_metadata: pd.DataFrame,
@@ -183,11 +217,14 @@ def save_sequence_metadata(
     test_sequence_metadata.to_csv(SEQUENCE_DATA_DIR / "test_sequence_metadata.csv", index=False)
 
 
+# Save the selected feature columns and sequence-building settings.
 def save_sequence_config(feature_columns: list[str], build_info: dict) -> None:
     save_json({"feature_columns": feature_columns}, SEQUENCE_DATA_DIR / "sequence_feature_columns.json")
     save_json(build_info, SEQUENCE_DATA_DIR / "sequence_build_config.json")
 
 
+# Create simple label-distribution plots for the generated train, validation,
+# and test sequence sets.
 def create_sequence_plots(
     y_train: np.ndarray,
     y_validation: np.ndarray,
@@ -199,7 +236,10 @@ def create_sequence_plots(
         ("test", y_test),
     ]:
         label_counts = pd.Series(labels).value_counts().sort_index()
-        display_names = [LABEL_ID_TO_NAME.get(int(label_id), str(label_id)) for label_id in label_counts.index]
+        display_names = [
+            LABEL_ID_TO_NAME.get(int(label_id), str(label_id))
+            for label_id in label_counts.index
+        ]
 
         plt.figure(figsize=(7, 5))
         plt.bar(display_names, label_counts.values)
@@ -209,11 +249,14 @@ def create_sequence_plots(
         plt.close()
 
 
+# Print the generated sequence tensor and label-array shapes for quick
+# verification during execution.
 def print_sequence_summary(split_name: str, X_sequences: np.ndarray, y_sequences: np.ndarray) -> None:
     print(f"[INFO] {split_name} X shape: {X_sequences.shape}")
     print(f"[INFO] {split_name} y shape: {y_sequences.shape}")
 
 
+# Define the main execution flow.
 def main() -> None:
     create_folders()
 
@@ -255,5 +298,6 @@ def main() -> None:
     print("[INFO] Sequence dataset building completed successfully.")
 
 
+# Execute the main function when the script is run directly.
 if __name__ == "__main__":
     main()
