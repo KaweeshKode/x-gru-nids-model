@@ -173,6 +173,64 @@ def evaluate_binary_performance(y_test: np.ndarray, predicted_labels: np.ndarray
     return report_dict, report_text, confusion
 
 
+def build_three_class_summary_table(report_dict: dict) -> pd.DataFrame:
+    summary_row = {
+        "evaluation_view": "3-class",
+        "accuracy": float(report_dict["accuracy"]),
+        "macro_precision": float(report_dict["macro avg"]["precision"]),
+        "macro_recall": float(report_dict["macro avg"]["recall"]),
+        "macro_f1_score": float(report_dict["macro avg"]["f1-score"]),
+        "weighted_precision": float(report_dict["weighted avg"]["precision"]),
+        "weighted_recall": float(report_dict["weighted avg"]["recall"]),
+        "weighted_f1_score": float(report_dict["weighted avg"]["f1-score"]),
+    }
+    return pd.DataFrame([summary_row])
+
+
+def build_three_class_classwise_table(report_dict: dict) -> pd.DataFrame:
+    rows = []
+    for class_name in CLASS_NAMES:
+        rows.append(
+            {
+                "class_name": class_name,
+                "precision": float(report_dict[class_name]["precision"]),
+                "recall": float(report_dict[class_name]["recall"]),
+                "f1_score": float(report_dict[class_name]["f1-score"]),
+                "support": int(report_dict[class_name]["support"]),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def build_binary_summary_table(report_dict: dict) -> pd.DataFrame:
+    summary_row = {
+        "evaluation_view": "binary_supplementary",
+        "accuracy": float(report_dict["accuracy"]),
+        "macro_precision": float(report_dict["macro avg"]["precision"]),
+        "macro_recall": float(report_dict["macro avg"]["recall"]),
+        "macro_f1_score": float(report_dict["macro avg"]["f1-score"]),
+        "weighted_precision": float(report_dict["weighted avg"]["precision"]),
+        "weighted_recall": float(report_dict["weighted avg"]["recall"]),
+        "weighted_f1_score": float(report_dict["weighted avg"]["f1-score"]),
+    }
+    return pd.DataFrame([summary_row])
+
+
+def build_binary_classwise_table(report_dict: dict) -> pd.DataFrame:
+    rows = []
+    for class_name in ["normal", "attack_like"]:
+        rows.append(
+            {
+                "class_name": class_name,
+                "precision": float(report_dict[class_name]["precision"]),
+                "recall": float(report_dict[class_name]["recall"]),
+                "f1_score": float(report_dict[class_name]["f1-score"]),
+                "support": int(report_dict[class_name]["support"]),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 # Save the test predictions, numeric evaluation summaries, and text reports.
 def save_evaluation_outputs(
     prediction_table: pd.DataFrame,
@@ -191,6 +249,34 @@ def save_evaluation_outputs(
 
     with open(EVALUATION_OUTPUT_DIR / "classification_report_binary.txt", "w", encoding="utf-8") as handle:
         handle.write(report_binary_text)
+
+    # Main three-class summary table for thesis/report use.
+    summary_3class_table = build_three_class_summary_table(metrics_3class)
+    summary_3class_table.to_csv(
+        EVALUATION_OUTPUT_DIR / "summary_metrics_3class.csv",
+        index=False,
+    )
+
+    # Main class-wise table with support for normal / suspicious / attack.
+    classwise_3class_table = build_three_class_classwise_table(metrics_3class)
+    classwise_3class_table.to_csv(
+        EVALUATION_OUTPUT_DIR / "classwise_metrics_3class.csv",
+        index=False,
+    )
+
+    # Supplementary binary summary table.
+    summary_binary_table = build_binary_summary_table(metrics_binary)
+    summary_binary_table.to_csv(
+        EVALUATION_OUTPUT_DIR / "summary_metrics_binary_supplementary.csv",
+        index=False,
+    )
+
+    # Supplementary binary class-wise table.
+    classwise_binary_table = build_binary_classwise_table(metrics_binary)
+    classwise_binary_table.to_csv(
+        EVALUATION_OUTPUT_DIR / "classwise_metrics_binary_supplementary.csv",
+        index=False,
+    )
 
 
 # Render and save a confusion-matrix heatmap.
@@ -224,48 +310,67 @@ def create_evaluation_plots(
     confusion_3class: np.ndarray,
     confusion_binary: np.ndarray,
 ) -> None:
+    # Main evaluation: full three-class confusion matrix.
     create_confusion_matrix_plot(
         confusion_3class,
         CLASS_NAMES,
-        EVALUATION_PLOT_DIR / "confusion_matrix_3class.png",
-        "3-class confusion matrix",
+        EVALUATION_PLOT_DIR / "confusion_matrix_3class_main.png",
+        "Main evaluation: 3-class confusion matrix",
     )
 
+    # Supplementary evaluation: binary collapsed view.
     create_confusion_matrix_plot(
         confusion_binary,
         ["normal", "attack_like"],
-        EVALUATION_PLOT_DIR / "confusion_matrix_binary.png",
-        "Binary confusion matrix",
+        EVALUATION_PLOT_DIR / "confusion_matrix_binary_supplementary.png",
+        "Supplementary evaluation: binary confusion matrix",
     )
-    
-    # Collapse the three-class ground truth into a binary evaluation view.
+
+    # Supplementary binary evaluation only.
     true_binary = np.where(y_test == 0, 0, 1)
     attack_like_score = predicted_probabilities[:, 1] + predicted_probabilities[:, 2]
 
     fpr, tpr, _ = roc_curve(true_binary, attack_like_score)
     roc_auc = auc(fpr, tpr)
-    
+
     plt.figure(figsize=(7, 5))
     plt.plot(fpr, tpr, label=f"AUC = {roc_auc:.4f}")
     plt.plot([0, 1], [0, 1], linestyle="--")
     plt.xlabel("False positive rate")
     plt.ylabel("True positive rate")
-    plt.title("Binary ROC curve")
+    plt.title("Supplementary binary ROC curve (normal vs attack-like)")
     plt.legend()
     plt.tight_layout()
-    plt.savefig(EVALUATION_PLOT_DIR / "roc_curve_binary.png", dpi=150)
+    plt.savefig(
+        EVALUATION_PLOT_DIR / "roc_curve_binary_supplementary.png",
+        dpi=150,
+    )
     plt.close()
-    
+
     precision, recall, _ = precision_recall_curve(true_binary, attack_like_score)
-    
+
     plt.figure(figsize=(7, 5))
     plt.plot(recall, precision)
     plt.xlabel("Recall")
     plt.ylabel("Precision")
-    plt.title("Binary precision-recall curve")
+    plt.title("Supplementary binary precision-recall curve (normal vs attack-like)")
     plt.tight_layout()
-    plt.savefig(EVALUATION_PLOT_DIR / "precision_recall_curve_binary.png", dpi=150)
+    plt.savefig(
+        EVALUATION_PLOT_DIR / "precision_recall_curve_binary_supplementary.png",
+        dpi=150,
+    )
     plt.close()
+
+    # Save compact supplementary ROC/AUC metadata for reporting.
+    binary_curve_summary = {
+        "evaluation_view": "binary_supplementary",
+        "description": "Suspicious and attack classes are grouped as attack_like for additional anomaly-detection comparison.",
+        "roc_auc": float(roc_auc),
+    }
+    save_json(
+        binary_curve_summary,
+        EVALUATION_OUTPUT_DIR / "binary_supplementary_curve_metrics.json",
+    )
 
 
 # Flatten each sequence into a single row so SHAP and LIME can work with a
